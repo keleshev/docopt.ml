@@ -1,0 +1,9 @@
+*.annot
+*.cmi
+*.cmo
+*.cmt
+*.cmx
+*.o
+*.swp
+a.out
+test
