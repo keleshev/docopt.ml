@@ -1,6 +1,9 @@
 .PHONY: test
 test:
-	ocamlopt -annot shim.ml parsing.ml test_parsing.ml -o test && ./test
+	ocamlopt -g -annot shim.ml \
+	  parsing.ml test_parsing.ml \
+          docopt.ml test_docopt.ml \
+	  -o test && ./test
 
 .PHONY: clean
 clean:

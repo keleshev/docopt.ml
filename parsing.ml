@@ -1,35 +1,36 @@
 open Shim
 
-module Source2 = struct
-  module Core = struct
+module Source = struct
+  module Core : sig
+    type t = private {index: int; string: string}
+    val of_string : string -> t
+    val next : t -> (char * t) option
+  end = struct
     type t = {index: int; string: string}
 
-    let invariant {index; string} =
+    let invariants {index; string} =
       index >= 0 && index <= String.length string
 
-    let _empty = {index=0; string=""}
+    let create index string =
+      let source = {index; string} in
+      assert (invariants source);
+      source
+
+    let of_string = create 0
 
     let next {index; string} =
       match String.get_opt string index with
       | None -> None
-      | Some char -> Some (char, {string; index=index + 1})
+      | Some char -> Some (char, create (index + 1) string)
   end
 
   include Core
-end
 
-module Source = struct
-  type t = End | Cons of char * t Lazy.t
+  let to_string {index; string} = (* port slice to shim *)
+    let length = String.length string in
+    String.sub string ~pos:index ~len:(length - index)
 
-  let rec of_stream stream =
-    try Cons (Stream.next stream, lazy (of_stream stream))
-    with Stream.Failure -> End
-
-  let of_string = Stream.of_string >> of_stream
-
-  let rec to_string = function (* O(n^2) *)
-    | End -> ""
-    | Cons (char, lazy rest) -> Char.to_string char ^ to_string rest
+  let empty = of_string ""
 end
 
 type 'result t = Source.t -> ('result * Source.t) option
@@ -58,15 +59,20 @@ let not_followed_by parser source =
 let followed_by parser =
   not_followed_by (not_followed_by parser)
 
-let eof = function
-  | Source.End -> Some ((), Source.End)
+let eof source = match Source.next source with
+  | None -> Some ((), Source.empty)
   | _ -> None
+
+let option parser =
+  (<|>)
+    (parser >>= fun result -> return (Some result))
+    (return None)
 
 let default value parser = parser <|> return value
 
-let any = function
-  | Source.Cons (char, lazy source) -> Some (char, source)
-  | Source.End -> None
+let any source = match Source.next source with (* id? *)
+  | Some (char, source) -> Some (char, source)
+  | None -> None
 
 let cons parser parsers =
   parser >>= fun result ->

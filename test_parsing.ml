@@ -46,3 +46,7 @@ let () = ()
   ; parse (between '2' '4') (source "3") => Some '3'
   ; parse (between '2' '4') (source "4") => Some '4'
   ; parse (between '2' '4') (source "5") => None
+
+let () = ()
+  ; parse (option x) (source "x") => Some (Some 'x')
+  ; parse (option x) (source "y") => Some None
