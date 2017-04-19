@@ -57,19 +57,39 @@ type t =
 module Parser = struct
   open Parsing
 
-  let rec one_or_more () =
-    all ()      >>= fun child ->
+  let parenthesised parser =
+    char '(' >=>
+    parser   >>= fun result ->
+    char ')' >=>
+    return result
+
+  let (&) = (|>)
+
+  let whitespace =
+    one_or_more (Char.set " \t\n\r")
+
+  let rec one_or_more source = source &
+    group       >>= fun child ->
     char '.'    >=>
     char '.'    >=>
     char '.'    >=>
     return (One_or_more child)
 
-  and atom () =
+  and sequence source = source &
+    separated ~by:whitespace not_sequence >>= function
+    | [] -> failwith "`separated` must never return []"
+    | [singleton] -> return singleton
+    | many -> return (Sequence many)
+
+  and atom source = source &
     Atom.parser >>= fun atom ->
     return (Atom atom)
 
-  and all () =
-    one_or_more () <|> atom ()
+  and group source = source &
+    atom <|> parenthesised sequence
+
+  and not_sequence source = source &
+    one_or_more <|> atom
 
 end
 

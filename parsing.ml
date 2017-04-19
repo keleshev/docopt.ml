@@ -108,6 +108,9 @@ let separated ~by parser =
   return (first :: rest)
 
 module Char = struct
+  let set string =
+    satisfy (String.contains string)
+
   let zero_or_more parser =
     zero_or_more parser >>= fun chars ->
     return (String.of_char_list chars)

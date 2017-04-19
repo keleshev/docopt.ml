@@ -38,10 +38,25 @@ end
 module ParserTest = struct
   open Parser
 
+  let hai = Atom (Atom.Command "hai")
+  let bye = Atom (Atom.Command "bye")
+
   let () = ()
-    ; parse (one_or_more ()) "hai..."
-        => Some (One_or_more (Atom (Atom.Command "hai")))
-    (* weird...... *)
-    ; parse (one_or_more ()) "hai......"
-        => Some (One_or_more (One_or_more (Atom (Atom.Command "hai"))))
+    ; parse one_or_more "hai..."
+        => Some (One_or_more hai)
+
+    ; parse one_or_more "hai......"
+        => None
+
+    ; parse one_or_more "(hai...)..."
+        => Some (One_or_more (One_or_more hai))
+
+    ; parse sequence "hai bye"
+        => Some (Sequence [hai; bye])
+
+    ; parse sequence "hai \n\r\t bye"
+        => Some (Sequence [hai; bye])
+
+    ; parse sequence "hai... bye"
+        => Some (Sequence [One_or_more hai; bye])
 end
