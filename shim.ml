@@ -29,6 +29,12 @@ module String = struct
     let array = Array.of_list chars in
     String.init (Array.length array) ~f:(Array.get array)
 
+  let fold string ~init ~f =
+    let length = length string in
+    let rec go i acc =
+      if i = length then acc else go (i + 1) (f acc string.[i]) in
+    go 0 init
+
   let get_opt string i =
     try Some string.[i]
     with Invalid_argument _ -> None

@@ -1,13 +1,13 @@
 let (=>) left right = print_string (if left = right then "." else "F")
 
-let parse parser string =
+let parse parser source_string =
   let open Parsing in
   let parse_all =
     parser >>= fun result ->
     eof >=>
     return result
   in
-  parse parse_all (Source.of_string string)
+  parse parse_all (Source.of_string source_string)
 
 open Docopt
 
@@ -51,6 +51,9 @@ module ParserTest = struct
     ; parse one_or_more "(hai...)..."
         => Some (One_or_more (One_or_more hai))
 
+    ; parse one_or_more "(hai... )..."
+        => Some (One_or_more (One_or_more hai))
+
     ; parse sequence "hai bye"
         => Some (Sequence [hai; bye])
 
@@ -59,4 +62,13 @@ module ParserTest = struct
 
     ; parse sequence "hai... bye"
         => Some (Sequence [One_or_more hai; bye])
+
+    ; parse alternative "hai|bye"
+        => Some (Alternative [hai; bye])
+
+    ; parse alternative "hai| bye"
+        => Some (Alternative [hai; bye])
+
+    ; parse alternative "hai | bye"
+        => Some (Alternative [hai; bye])
 end

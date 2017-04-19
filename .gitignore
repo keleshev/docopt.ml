@@ -4,6 +4,7 @@
 *.cmt
 *.cmx
 *.o
+*.obj
 *.swp
 a.out
 test

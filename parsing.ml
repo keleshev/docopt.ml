@@ -90,7 +90,8 @@ let one_or_more (parser : 'a t) =
   parser <::> (zero_or_more parser)
 
 let satisfy predicate =
-  any >>= (fun char -> if predicate char then return char else fail)
+  any >>= fun char ->
+  if predicate char then return char else fail
 
 let parse parser source =
   match parser source with
@@ -99,8 +100,6 @@ let parse parser source =
 
 let between left right =
   satisfy (fun char -> left <= char && char <= right)
-
-let char char = satisfy ((=) char)
 
 let separated ~by parser =
   parser >>= fun first ->
@@ -119,7 +118,18 @@ module Char = struct
     parser >>= fun first ->
     zero_or_more parser >>= fun rest ->
     return (Char.to_string first ^ rest)
+
+  let one char = satisfy ((=) char)
+
+  let whitespace = set " \t\n\r"
 end
+
+let char = Char.one
+
+let string string : string t =
+  String.fold string ~init:(return ()) ~f:(fun parser char ->
+    parser >=> Char.one char >=> return ()) >>= fun () ->
+  return string
 
 module Decimal = struct
   let digit = between '0' '9'
