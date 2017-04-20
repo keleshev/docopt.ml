@@ -7,6 +7,6 @@ test:
 
 .PHONY: clean
 clean:
-	cat .gitignore | xargs --delimiter='\n' --max-args=1 rm -f
+	cat .gitignore | tr '\n' '\0' | xargs -n1 -0 echo rm -f
 
 

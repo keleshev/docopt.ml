@@ -71,4 +71,13 @@ module ParserTest = struct
 
     ; parse alternative "hai | bye"
         => Some (Alternative [hai; bye])
+
+    ; parse optional "[hai]"
+        => Some (Optional [hai])
+
+    ; parse optional "[[hai]]"
+        => Some (Optional [Optional [hai]])
+
+    ; parse optional "[hai bye]"
+        => Some (Optional [hai; bye])
 end

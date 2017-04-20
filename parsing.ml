@@ -11,17 +11,21 @@ module Source = struct
     let invariants {index; string} =
       index >= 0 && index <= String.length string
 
-    let create index string =
+    let create_exn index string =
       let source = {index; string} in
       assert (invariants source);
       source
 
-    let of_string = create 0
+    let of_string = 
+      create_exn 0 (* exn: index of 0 is valid for all strings *)
 
     let next {index; string} =
       match String.get_opt string index with
       | None -> None
-      | Some char -> Some (char, create (index + 1) string)
+      | Some char -> 
+          (* exn: in this branch `index` is always a valid index of `string` 
+                  so `index + 1` will at most equal to `length string` *)
+          Some (char, create_exn (index + 1) string)
   end
 
   include Core
@@ -70,6 +74,9 @@ let option parser =
 
 let default value parser = parser <|> return value
 
+(* This might appear to be an identity function, but this will soon 
+   change when parser will switch to `result`, while Source will continue
+   using `option` type. *)
 let any source = match Source.next source with (* id? *)
   | Some (char, source) -> Some (char, source)
   | None -> None

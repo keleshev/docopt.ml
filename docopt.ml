@@ -61,6 +61,8 @@ module Parser = struct
     char ')' >=>
     return result
 
+  
+
   let (&) = (|>)
 
   let whitespace =
@@ -87,22 +89,33 @@ module Parser = struct
     end
   end
 
+  let bracketed parser =
+    Token.Bracket.left  >=>
+    parser              >>= fun result ->
+    Token.Bracket.right >=>
+    return result
+
   let rec one_or_more source = source &
     group          >>= fun child ->
     Token.ellipsis >=>
     return (One_or_more child)
 
+  and sequence_list source = source &
+    separated ~by:whitespace not_sequence
+
   and sequence source = source &
-    separated ~by:whitespace not_sequence >>= function
-    | [] -> failwith "`separated` must never return []"
+    sequence_list >>= function
     | [single] -> return single
     | many -> return (Sequence many)
 
   and alternative source = source &
     separated ~by:Token.pipe sequence >>= function
-    | [] -> failwith "`separated` must never return []"
     | [single] -> return single
     | many -> return (Alternative many)
+
+  and optional source = source &
+    bracketed sequence_list >>= fun items ->
+    return (Optional items)
 
   and atom source = source &
     Atom.parser >>= fun atom ->
