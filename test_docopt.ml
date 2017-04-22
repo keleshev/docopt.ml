@@ -75,9 +75,32 @@ module ParserTest = struct
     ; parse optional "[hai]"
         => Some (Optional [hai])
 
-    ; parse optional "[[hai]]"
-        => Some (Optional [Optional [hai]])
+(*  ; parse optional "[[hai]]"
+        => Some (Optional [Optional [hai]])*)
 
     ; parse optional "[hai bye]"
         => Some (Optional [hai; bye])
+end
+
+module ArgvTest = struct
+  open Argv
+  open Argv.Token
+
+  let () = ()
+    ; tokenize [] => []
+    ; tokenize ["hai"] => [Argument "hai"]
+    ; tokenize ["hai"; "bye"] => [Argument "hai"; Argument "bye"]
+
+    ; tokenize ["--hai"] => [Long_option ("--hai", None)]
+    ; tokenize ["--hai=bye"] => [Long_option ("--hai", Some "bye")]
+    ; tokenize ["--hai="] => [Long_option ("--hai", Some "")]
+
+    ; tokenize ["-h"] => [Short_options "-h"]
+    ; tokenize ["-hai"] => [Short_options "-hai"]
+
+    ; tokenize ["--"; "--hai"] => [Argument "--hai"]
+    ; tokenize ["--"; "--"] => [Argument "--"]
+
+    ; tokenize ["-"] => [Dash]
+    ; tokenize ["--"; "-"] => [Argument "-"]
 end
