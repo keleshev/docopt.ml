@@ -2,138 +2,141 @@ open Shim
 
 module Parsing = Parsing
 
-module Atom = struct
-  module Option = struct
+module Syntax = struct
+  module Atom = struct
+    module Option = struct
+      type t =
+        | Long of string * string option
+        | Short of string
+    end
+
+    open Option
+
     type t =
-      | Long of string * string option
-      | Short of string
+      | Option of Option.t
+      | Command of string
+      | Argument of string
+
+    module Parser = struct
+      open Parsing
+
+      let word =
+        Char.one_or_more Letters.Case.lower
+
+      let command =
+        word >>= fun name ->
+        return (Command name)
+
+      let argument =
+        char '<' >=>
+        word     >>= fun name ->
+        char '>' >=>
+        return (Argument name)
+
+      let long_option =
+        string "--" >=>
+        word     >>= fun keyword ->
+        option (
+          string "=<" >=>
+          word        >>= fun parameter ->
+          char '>'    >=>
+          return parameter
+        ) >>= fun parameter ->
+        return (Option (Long (keyword, parameter)))
+
+      let short_options =
+        char '-' >=>
+        word     >>= fun letters ->
+        return (Option (Short letters))
+
+      let atom = command <|> argument <|> long_option <|> short_options
+    end
+
+    let parser = Parser.atom
   end
 
   type t =
-    | Command of string
-    | Argument of string
-    | Long_option of string * string option
-    | Short_options of string
+    | Atom of Atom.t
+    | One_or_more of t
+    | Optional of t list
+    | Sequence of t list
+    | Alternative of t list
 
   module Parser = struct
     open Parsing
 
-    let word =
-      Char.one_or_more Letters.Case.lower
+    let parenthesised parser =
+      char '(' >=>
+      parser   >>= fun result ->
+      char ')' >=>
+      return result
 
-    let command =
-      word >>= fun name ->
-      return (Command name)
+    let (&) = (|>)
 
-    let argument =
-      char '<' >=>
-      word     >>= fun name ->
-      char '>' >=>
-      return (Argument name)
+    let whitespace =
+      zero_or_more Char.whitespace
 
-    let long_option =
-      string "--" >=>
-      word     >>= fun keyword ->
-      option (
-        string "=<" >=>
-        word        >>= fun parameter ->
-        char '>'    >=>
-        return parameter
-      ) >>= fun parameter ->
-      return (Long_option (keyword, parameter))
+    let token literal =
+      string literal >=>
+      whitespace >=>
+      return literal
 
-    let short_options =
-      char '-' >=>
-      word     >>= fun letters ->
-      return (Short_options letters)
+    module Token = struct
+      let ellipsis = token "..."
 
-    let atom = command <|> argument <|> long_option <|> short_options
-  end
+      let pipe = token "|"
 
-  let parser = Parser.atom
-end
+      module Parenthesis = struct
+        let left = token "("
+        let right = token ")"
+      end
 
-type t =
-  | Atom of Atom.t
-  | One_or_more of t
-  | Optional of t list
-  | Sequence of t list
-  | Alternative of t list
-
-module Parser = struct
-  open Parsing
-
-  let parenthesised parser =
-    char '(' >=>
-    parser   >>= fun result ->
-    char ')' >=>
-    return result
-
-  let (&) = (|>)
-
-  let whitespace =
-    zero_or_more Char.whitespace
-
-  let token literal =
-    string literal >=>
-    whitespace >=>
-    return literal
-
-  module Token = struct
-    let ellipsis = token "..."
-
-    let pipe = token "|"
-
-    module Parenthesis = struct
-      let left = token "("
-      let right = token ")"
+      module Bracket = struct
+        let left = token "["
+        let right = token "]"
+      end
     end
 
-    module Bracket = struct
-      let left = token "["
-      let right = token "]"
-    end
+    let bracketed parser =
+      Token.Bracket.left  >=>
+      parser              >>= fun result ->
+      Token.Bracket.right >=>
+      return result
+
+    let rec one_or_more source = source &
+      group          >>= fun child ->
+      Token.ellipsis >=>
+      return (One_or_more child)
+
+    and sequence_list source = source &
+      separated ~by:whitespace not_sequence
+
+    and sequence source = source &
+      sequence_list >>= function
+      | [single] -> return single
+      | many -> return (Sequence many)
+
+    and alternative source = source &
+      separated ~by:Token.pipe sequence >>= function
+      | [single] -> return single
+      | many -> return (Alternative many)
+
+    and optional source = source &
+      bracketed sequence_list >>= fun items ->
+      return (Optional items)
+
+    and atom source = source &
+      Atom.parser >>= fun atom ->
+      whitespace >=>
+      return (Atom atom)
+
+    and group source = source &
+      atom <|> parenthesised sequence
+
+    and not_sequence source = source &
+      one_or_more <|> atom
+
   end
-
-  let bracketed parser =
-    Token.Bracket.left  >=>
-    parser              >>= fun result ->
-    Token.Bracket.right >=>
-    return result
-
-  let rec one_or_more source = source &
-    group          >>= fun child ->
-    Token.ellipsis >=>
-    return (One_or_more child)
-
-  and sequence_list source = source &
-    separated ~by:whitespace not_sequence
-
-  and sequence source = source &
-    sequence_list >>= function
-    | [single] -> return single
-    | many -> return (Sequence many)
-
-  and alternative source = source &
-    separated ~by:Token.pipe sequence >>= function
-    | [single] -> return single
-    | many -> return (Alternative many)
-
-  and optional source = source &
-    bracketed sequence_list >>= fun items ->
-    return (Optional items)
-
-  and atom source = source &
-    Atom.parser >>= fun atom ->
-    whitespace >=>
-    return (Atom atom)
-
-  and group source = source &
-    atom <|> parenthesised sequence
-
-  and not_sequence source = source &
-    one_or_more <|> atom
-
 end
 
 module Argv = struct
