@@ -1,12 +1,15 @@
 .PHONY: test
 test:
-	ocamlopt -g -annot shim.ml \
-	  parsing.ml test_parsing.ml \
+	ocamlc -g -annot \
+	  shim.ml \
+	  parsing_framework.ml test_parsing_framework.ml \
+	  syntax.ml \
+	  parser.ml test_parser.ml \
           docopt.ml test_docopt.ml \
 	  -o test && ./test
 
 .PHONY: clean
 clean:
-	cat .gitignore | tr '\n' '\0' | xargs -n1 -0 echo rm -f
+	rm -f `cat .gitignore`
 
 
