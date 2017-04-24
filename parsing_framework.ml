@@ -16,14 +16,14 @@ module Source = struct
       assert (invariants source);
       source
 
-    let of_string = 
+    let of_string =
       create_exn 0 (* exn: index of 0 is valid for all strings *)
 
     let next {index; string} =
       match String.get_opt string index with
       | None -> None
-      | Some char -> 
-          (* exn: in this branch `index` is always a valid index of `string` 
+      | Some char ->
+          (* exn: in this branch `index` is always a valid index of `string`
                   so `index + 1` will at most equal to `length string` *)
           Some (char, create_exn (index + 1) string)
   end
@@ -46,10 +46,17 @@ let (>>=) parse f source =
 
 let (>=>) parser1 parser2 = parser1 >>= fun _ -> parser2
 
-let (<|>) parser1 parser2 source =
+let (</>) parser1 parser2 source =
   match parser1 source with
   | Some _ as result -> result
   | None -> parser2 source
+
+let (<|>) parser1 parser2 source =
+  match parser1 source, parser2 source with
+  | None, None -> None
+  | Some _ as result, None -> result
+  | None, (Some _ as result) -> result
+  | Some _, Some _ -> failwith ("Ambiguous parse: " ^ Source.to_string source)
 
 let fail : 'a t = fun _ -> None
 
@@ -68,13 +75,13 @@ let eof source = match Source.next source with
   | _ -> None
 
 let option parser =
-  (<|>)
+  (</>)
     (parser >>= fun result -> return (Some result))
     (return None)
 
-let default value parser = parser <|> return value
+let default value parser = parser </> return value
 
-(* This might appear to be an identity function, but this will soon 
+(* This might appear to be an identity function, but this will soon
    change when parser will switch to `result`, while Source will continue
    using `option` type. *)
 let any source = match Source.next source with (* id? *)
@@ -151,4 +158,4 @@ module Letters = struct
   end
 end
 
-let letter = Letters.Case.(upper <|> lower)
+let letter = Letters.Case.(upper </> lower)

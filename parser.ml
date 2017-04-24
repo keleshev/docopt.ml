@@ -107,4 +107,4 @@ and group source = source &
   atom <|> parenthesised sequence
 
 and not_sequence source = source &
-  one_or_more <|> atom
+  one_or_more </> atom

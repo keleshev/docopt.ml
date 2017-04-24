@@ -1,4 +1,7 @@
 let (=>) left right = print_string (if left = right then "." else "F")
+let raises expected_exn thunk =
+  try thunk () |> ignore; 0 => 1
+  with exn -> exn => expected_exn
 
 module Source = Parsing_framework.Source
 let source = Source.of_string
@@ -27,6 +30,19 @@ let () = ()
   ; parse (not_followed_by eof) (source "") => None
   ; parse (not_followed_by eof) (source "a") => Some ()
   ; parse (not_followed_by eof >=> char 'a' >=> eof) (source "a") => Some ()
+
+let () = ()
+  ; parse (char 'x' <|> char 'y') (source "x") => Some 'x'
+  ; parse (char 'x' <|> char 'y') (source "y") => Some 'y'
+  ; parse (char 'x' <|> char 'x') (source "y") => None
+  ; raises (Failure "Ambiguous parse: x") @@ fun () ->
+      parse (char 'x' <|> char 'x') (source "x")
+
+let () = ()
+  ; parse (char 'x' </> char 'y') (source "x") => Some 'x'
+  ; parse (char 'x' </> char 'y') (source "y") => Some 'y'
+  ; parse (char 'x' </> char 'x') (source "y") => None
+  ; parse (char 'x' </> char 'x') (source "x") => Some 'x'
 
 let () = ()
   ; parse (followed_by x) (source "aa") => None
