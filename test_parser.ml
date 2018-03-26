@@ -37,41 +37,55 @@ let hai = Atom (Command "hai")
 let bye = Atom (Command "bye")
 
 let () = let open Parser in ()
-  ; parse one_or_more "hai..."
+  ; parse expr "hai "
+      => Some (Atom (Command "hai"))
+
+  ; parse expr "hai..."
       => Some (One_or_more hai)
 
-  ; parse one_or_more "hai......"
+  ; parse expr "(hai)"
+      => Some (hai)
+
+  ; parse expr "(hai...)"
+      => Some (One_or_more hai)
+
+  ; parse expr "hai......"
       => None
 
-  ; parse one_or_more "(hai...)..."
+  ; parse expr "(hai...)..."
       => Some (One_or_more (One_or_more hai))
 
-  ; parse one_or_more "(hai... )..."
+  ; parse expr "(hai... )..."
       => Some (One_or_more (One_or_more hai))
 
-  ; parse sequence "hai bye"
+  ; parse expr "hai bye"
       => Some (Sequence [hai; bye])
 
-  ; parse sequence "hai \n\r\t bye"
+  ; parse expr "hai \n\r\t bye"
       => Some (Sequence [hai; bye])
 
-  ; parse sequence "hai... bye"
+  ; parse expr "hai... bye"
       => Some (Sequence [One_or_more hai; bye])
 
-  ; parse alternative "hai|bye"
+  ; parse expr "hai|bye"
       => Some (Alternative [hai; bye])
 
-  ; parse alternative "hai| bye"
+  ; parse expr "hai| bye"
       => Some (Alternative [hai; bye])
 
-  ; parse alternative "hai | bye"
+  ; parse expr "hai | bye"
       => Some (Alternative [hai; bye])
 
-  ; parse optional "[hai]"
+  ; parse expr "hai | bye hai"
+      => Some (Alternative [hai; Sequence [bye; hai]])
+
+  ; parse expr "[hai]"
       => Some (Optional [hai])
 
-(*; parse optional "[[hai]]"
-      => Some (Optional [Optional [hai]])*)
+  ; parse expr "[[hai]]"
+      => Some (Optional [Optional [hai]])
 
-  ; parse optional "[hai bye]"
-      => Some (Optional [hai; bye])
+  ; parse expr "[hai bye]"
+      => Some (Optional [Sequence [hai; bye]])
+
+

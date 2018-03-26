@@ -103,6 +103,13 @@ let rec zero_or_more (parser : 'a t) =
 let one_or_more (parser : 'a t) =
   parser <::> (zero_or_more parser)
 
+(*
+let rec one_or_more (parser : 'a t) =
+  parser >>= fun x ->
+  default [] (one_or_more parser) >>= fun xs ->
+  return (x :: xs)
+*)
+
 let satisfy predicate =
   any >>= fun char ->
   if predicate char then return char else fail
@@ -158,4 +165,4 @@ module Letters = struct
   end
 end
 
-let letter = Letters.Case.(upper </> lower)
+let letter = Letters.Case.(upper <|> lower)

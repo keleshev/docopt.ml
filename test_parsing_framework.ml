@@ -50,11 +50,20 @@ let () = ()
   (* does not consume input *)
   ; parse (followed_by x >=> char 'x' >=> eof) (source "x") => Some ()
 
+
+let () = ()
+  ; parse (zero_or_more x) (source "") => Some []
+  ; parse (zero_or_more x) (source "x") => Some ['x']
+  ; parse (zero_or_more x) (source "xx") => Some ['x'; 'x']
+  ; parse (zero_or_more x) (source "xx") => Some ['x'; 'x']
+  ; parse (zero_or_more any) (source "123") => Some ['1'; '2'; '3']
+
 let () = ()
   ; parse (one_or_more x) (source "") => None
   ; parse (one_or_more x) (source "x") => Some ['x']
   ; parse (one_or_more x) (source "xx") => Some ['x'; 'x']
   ; parse (one_or_more x) (source "xx") => Some ['x'; 'x']
+  ; parse (one_or_more any) (source "123") => Some ['1'; '2'; '3']
 
 let () = ()
   ; parse (between '2' '4') (source "1") => None

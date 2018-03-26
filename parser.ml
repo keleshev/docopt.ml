@@ -5,6 +5,10 @@ open Syntax.Abstract
 open Syntax.Abstract.Atom
 open Syntax.Abstract.Atom.Option
 
+let fix f_nonrec x =
+  let rec f = lazy (fun x -> f_nonrec (Lazy.force f) x) in
+  (Lazy.force f) x
+
 module Atom = struct
   let word =
     Char.one_or_more Letters.Case.lower
@@ -38,14 +42,6 @@ module Atom = struct
   let parser = command <|> argument <|> long_option <|> short_options
 end
 
-let parenthesised parser =
-  char '(' >=>
-  parser   >>= fun result ->
-  char ')' >=>
-  return result
-
-let (&) = (|>)
-
 let whitespace =
   zero_or_more Char.whitespace
 
@@ -70,41 +66,46 @@ module Token = struct
   end
 end
 
-let bracketed parser =
-  Token.Bracket.left  >=>
-  parser              >>= fun result ->
-  Token.Bracket.right >=>
+let wrapped left parser right =
+  left >=>
+  parser >>= fun result ->
+  right >=>
   return result
 
-let rec one_or_more source = source &
-  group          >>= fun child ->
-  Token.ellipsis >=>
-  return (One_or_more child)
+let in_brackets parser =
+  wrapped Token.Bracket.left parser Token.Bracket.right
 
-and sequence_list source = source &
-  separated ~by:whitespace not_sequence
+let in_parenthesis parser =
+  wrapped Token.Parenthesis.left parser Token.Parenthesis.right
 
-and sequence source = source &
-  sequence_list >>= function
-  | [single] -> return single
-  | many -> return (Sequence many)
-
-and alternative source = source &
-  separated ~by:Token.pipe sequence >>= function
-  | [single] -> return single
-  | many -> return (Alternative many)
-
-and optional source = source &
-  bracketed sequence_list >>= fun items ->
-  return (Optional items)
-
-and atom source = source &
-  Atom.parser >>= fun atom ->
+let atom =
+  Atom.parser >>= fun a ->
   whitespace >=>
-  return (Atom atom)
+  return (Atom a)
 
-and group source = source &
-  atom <|> parenthesised sequence
 
-and not_sequence source = source &
-  one_or_more </> atom
+let expr = fix @@ fun expr ->
+
+  let optional =
+    in_brackets expr >>= fun item ->
+    return (Optional [item])
+  in
+
+  let root = atom <|> optional <|> in_parenthesis expr in
+
+  let one_or_more =
+    root >>= fun child ->
+    default child (Token.ellipsis >=> return (One_or_more child))
+  in
+  let sequence =
+    separated ~by:whitespace one_or_more >>= function
+(*  Also valid: Parsing_framework.one_or_more one_or_more >>= function *)
+    | [single] -> return single
+    | multiple -> return (Sequence multiple)
+  in
+  let alternative =
+    separated ~by:Token.pipe sequence >>= function
+    | [single] -> return single
+    | multiple -> return (Alternative multiple)
+  in
+  alternative
