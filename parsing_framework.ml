@@ -70,7 +70,7 @@ let not_followed_by parser source =
 let followed_by parser =
   not_followed_by (not_followed_by parser)
 
-let eof source = match Source.next source with
+let end_of_input source = match Source.next source with
   | None -> Some ((), Source.empty)
   | _ -> None
 

@@ -25,11 +25,13 @@ let x = satisfy ((=) 'x')
 let () = ()
   ; parse (not_followed_by x) (source "xa") => None
   ; parse (not_followed_by x) (source "aa") => Some ()
-  ; parse (not_followed_by x >=> char 'a' >=> eof) (source "a") => Some ()
+  ; parse (not_followed_by x >=> char 'a' >=> end_of_input) (source "a")
+      => Some ()
   ; parse (not_followed_by x) (source "") => Some ()
-  ; parse (not_followed_by eof) (source "") => None
-  ; parse (not_followed_by eof) (source "a") => Some ()
-  ; parse (not_followed_by eof >=> char 'a' >=> eof) (source "a") => Some ()
+  ; parse (not_followed_by end_of_input) (source "") => None
+  ; parse (not_followed_by end_of_input) (source "a") => Some ()
+  ; parse (not_followed_by end_of_input >=> char 'a' >=> end_of_input) (source "a")
+      => Some ()
 
 let () = ()
   ; parse (char 'x' <|> char 'y') (source "x") => Some 'x'
@@ -48,7 +50,8 @@ let () = ()
   ; parse (followed_by x) (source "aa") => None
   ; parse (followed_by x) (source "xa") => Some ()
   (* does not consume input *)
-  ; parse (followed_by x >=> char 'x' >=> eof) (source "x") => Some ()
+  ; parse (followed_by x >=> char 'x' >=> end_of_input) (source "x")
+      => Some ()
 
 
 let () = ()

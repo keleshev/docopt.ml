@@ -5,9 +5,9 @@ open Syntax.Abstract
 open Syntax.Abstract.Atom
 open Syntax.Abstract.Atom.Option
 
-let fix f_nonrec x =
-  let rec f = lazy (fun x -> f_nonrec (Lazy.force f) x) in
-  (Lazy.force f) x
+let fix f_nonrec =
+  let rec f t = f_nonrec f t in
+  f
 
 module Atom = struct
   let word =
@@ -84,7 +84,7 @@ let atom =
   return (Atom a)
 
 
-let expr = fix @@ fun expr ->
+let rec expr x =
 
   let optional =
     in_brackets expr >>= fun item ->
@@ -97,6 +97,7 @@ let expr = fix @@ fun expr ->
     root >>= fun child ->
     default child (Token.ellipsis >=> return (One_or_more child))
   in
+
   let sequence =
     separated ~by:whitespace one_or_more >>= function
 (*  Also valid: Parsing_framework.one_or_more one_or_more >>= function *)
@@ -108,4 +109,4 @@ let expr = fix @@ fun expr ->
     | [single] -> return single
     | multiple -> return (Alternative multiple)
   in
-  alternative
+  alternative x

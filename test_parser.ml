@@ -8,7 +8,7 @@ let parse parser source_string =
   let open Parsing_framework in
   let parse_all =
     parser >>= fun result ->
-    eof >=>
+    end_of_input >=>
     return result
   in
   parse parse_all (Source.of_string source_string)
