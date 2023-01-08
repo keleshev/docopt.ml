@@ -1,0 +1,9 @@
+(library
+ (name docopt)
+ (public_name docopt)
+ (modules docopt))
+
+(test
+ (name docopt_test)
+ (modules docopt_test)
+ (libraries docopt))
