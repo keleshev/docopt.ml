@@ -8,17 +8,6 @@ let (let*) = Result.bind
 module Env = struct 
   include Map.Make (String)
 
-  let to_list m = to_seq m |> List.of_seq
-
-  let combine combiner  =
-    let merger key left right =
-      match left, right with
-      | Some one_t, None | None, Some one_t -> Some one_t
-      | None, None -> None
-      | Some left, Some right -> Some (combiner key left right)
-    in
-    merge merger
-
   let merge_result (type e) (callback: string -> _ -> (_, e) result) left right =
     let exception Break of e in
     let merger key left right =
@@ -34,7 +23,6 @@ module Env = struct
     in
     try Ok (merge merger left right)
     with Break e -> Error e
-
 end
 
 module Pattern = struct
@@ -51,26 +39,6 @@ module Pattern = struct
     | Optional of t
     | Either of t * t
     | One_or_more of t
-
-  type 't t_open = [
-    | `Command of string
-    | `Argument of string
-    | `Sequence of 't * 't
-    | `Optional of 't
-    | `One_or_more of 't
-  ]
-
-  type t' = [
-    t' t_open
-    | `x
-  ]
-
-  module Full = struct
-    type t = [
-      t t_open
-      | `Either of t * t
-    ]
-  end
 end
 
 module Type = struct
@@ -111,41 +79,36 @@ end
 
 
 let rec infer = function
-  | Pattern.Argument a -> Env.singleton a Type.Dynamic.(String, Scalar)
-  | Pattern.Command c -> Env.singleton c Type.Dynamic.(Unit, Scalar)
+  | Pattern.Argument a -> Ok (Env.singleton a Type.Dynamic.(String, Scalar))
+  | Pattern.Command c -> Ok (Env.singleton c Type.Dynamic.(Unit, Scalar))
   | Pattern.Sequence (left, right) -> 
-      let env1 = infer left in
-      let env2 = infer right in
-      let combiner _key (left, _) (right, _) =
-        let open Type.Dynamic in
-        match left, right with
-        | Unit, Unit -> Unit, List
-        | String, String -> String, List
-        | Unit, String 
-        | String, Unit -> failwith "incompatible types" in
-      Env.combine combiner env1 env2
-  | Pattern.Either (left, right) ->
-      let env1 = infer left in
-      let env2 = infer right in
-      let merger _key left right =
-        let open Type.Dynamic in
-        match left, right with
-        | Some one_t, None | None, Some one_t -> Some (optionize one_t)
-        | Some (String, left_collection), Some (String, right_collection) ->
-            Some (String, max left_collection right_collection)
-        | Some (Unit, left_collection), Some (Unit, right_collection) ->
-            Some (Unit, max left_collection right_collection)
-        | Some (Unit, _), Some (String, _)
-        | Some (String, _), Some (Unit, _) -> failwith "incompatible types"
-        | None, None -> None
+      let* env1 = infer left in
+      let* env2 = infer right in
+      let merger _key = let open Type.Dynamic in function
+        | `Left t | `Right t -> Ok t 
+        | `Both ((Unit, _), (Unit, _)) -> Ok (Unit, List)
+        | `Both ((String, _), (String, _)) -> Ok (String, List)
+        | `Both ((String, _), (Unit, _))
+        | `Both ((Unit, _), (String, _)) -> Error `Incompatible_types
       in
-      Env.merge merger env1 env2
+      Env.merge_result merger env1 env2
+  | Pattern.Either (left, right) ->
+      let* env1 = infer left in
+      let* env2 = infer right in
+      let merger _key = let open Type.Dynamic in function
+        | `Left t | `Right t -> Ok (optionize t)
+        | `Both ((Unit, left), (Unit, right)) -> Ok (Unit, max left right)
+        | `Both ((String, left), (String, right)) -> Ok (String, max left right)
+        | `Both ((Unit, _), (String, _))
+        | `Both ((String, _), (Unit, _)) -> Error `Incompatible_types
+      in
+      Env.merge_result merger env1 env2
   | Pattern.Optional doc ->
-      let env = infer doc in
-      Env.map Type.Dynamic.optionize env
+      let* env = infer doc in
+      Ok (Env.map Type.Dynamic.optionize env)
   | Pattern.One_or_more doc ->
-      let env = infer doc in
-      Env.map (function x, _ -> x, Type.Dynamic.List) env
+      let* env = infer doc in
+      Ok (Env.map (function x, _ -> x, Type.Dynamic.List) env)
 
 
 type _ t =
