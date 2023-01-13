@@ -41,6 +41,16 @@ module Pattern = struct
     | One_or_more of t
 end
 
+module Value = struct
+  type t = 
+    | Unit 
+    | Bool of bool 
+    | Int of int 
+    | String of string 
+    | Option of string option
+    | List of string list
+end
+
 module Type = struct
   type _ t =
     | String: string t
@@ -74,8 +84,18 @@ module Type = struct
     let optionize: t -> t = function
       | x, Scalar -> x, Option
       | t -> t
+
+    let default_value = function
+      | Unit,   Scalar -> Value.Unit
+      | Unit,   Option -> Value.Bool false
+      | Unit,   List   -> Value.Int 0
+      | String, Scalar -> Value.String ""
+      | String, Option -> Value.Option None
+      | String, List   -> Value.List []
   end
 end
+
+(*type env = {commands: Env.t; arguments: Env.t}*)
 
 
 let rec infer = function
@@ -88,8 +108,8 @@ let rec infer = function
         | `Left t | `Right t -> Ok t 
         | `Both ((Unit, _), (Unit, _)) -> Ok (Unit, List)
         | `Both ((String, _), (String, _)) -> Ok (String, List)
-        | `Both ((String, _), (Unit, _))
-        | `Both ((Unit, _), (String, _)) -> Error `Incompatible_types
+        | `Both ((Unit, _), (String, _))
+        | `Both ((String, _), (Unit, _)) -> Error `Incompatible_types
       in
       Env.merge_result merger env1 env2
   | Pattern.Either (left, right) ->
@@ -109,6 +129,12 @@ let rec infer = function
   | Pattern.One_or_more doc ->
       let* env = infer doc in
       Ok (Env.map (function x, _ -> x, Type.Dynamic.List) env)
+
+(** Match positional-only pattern against positional-only args *)
+(*let match_args ~env args =
+  | Pattern.Argument a ->
+      match args with
+      | head :: tail -> *)
 
 
 type _ t =
