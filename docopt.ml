@@ -5,7 +5,7 @@ let hello = "world"
 
 let (let*) = Result.bind
 
-module Env = struct 
+module Map = struct 
   include Map.Make (String)
 
   let merge_result (type e) (callback: string -> _ -> (_, e) result) left right =
@@ -23,6 +23,16 @@ module Env = struct
     in
     try Ok (merge merger left right)
     with Break e -> Error e
+
+  let merge callback left right =
+    let merger _key left right =
+      match left, right with
+        | Some one, None -> Some (callback (`Left one))
+        | None, Some one -> Some (callback (`Right one))
+        | Some l, Some r -> Some (callback (`Both (l, r)))
+        | None, None -> assert false
+    in
+    merge merger left right
 end
 
 module Pattern = struct
@@ -95,41 +105,48 @@ module Type = struct
   end
 end
 
-(*type env = {commands: Env.t; arguments: Env.t}*)
+module Env = struct
+  type arity = One | Option | List
+  type t = {commands: arity Map.t; arguments: arity Map.t}
+
+  let map callback {commands; arguments} =
+    let commands = Map.map callback commands in
+    let arguments = Map.map callback arguments in
+    {commands; arguments}
+
+  let merge callback map1 map2 =
+    let commands = Map.merge callback map1.commands map2.commands in
+    let arguments = Map.merge callback map1.arguments map2.arguments in
+    {commands; arguments}
+end
 
 
 let rec infer = function
-  | Pattern.Argument a -> Ok (Env.singleton a Type.Dynamic.(String, Scalar))
-  | Pattern.Command c -> Ok (Env.singleton c Type.Dynamic.(Unit, Scalar))
+  | Pattern.Argument a ->
+      Env.{commands=Map.empty; arguments=Map.singleton a One}
+  | Pattern.Command c ->
+      Env.{commands=Map.singleton c One; arguments=Map.empty}
   | Pattern.Sequence (left, right) -> 
-      let* env1 = infer left in
-      let* env2 = infer right in
-      let merger _key = let open Type.Dynamic in function
-        | `Left t | `Right t -> Ok t 
-        | `Both ((Unit, _), (Unit, _)) -> Ok (Unit, List)
-        | `Both ((String, _), (String, _)) -> Ok (String, List)
-        | `Both ((Unit, _), (String, _))
-        | `Both ((String, _), (Unit, _)) -> Error `Incompatible_types
+      let merger = function
+        | `Left t | `Right t -> t
+        | `Both _ -> Env.List
       in
-      Env.merge_result merger env1 env2
+      Env.merge merger (infer left) (infer right)
   | Pattern.Either (left, right) ->
-      let* env1 = infer left in
-      let* env2 = infer right in
-      let merger _key = let open Type.Dynamic in function
-        | `Left t | `Right t -> Ok (optionize t)
-        | `Both ((Unit, left), (Unit, right)) -> Ok (Unit, max left right)
-        | `Both ((String, left), (String, right)) -> Ok (String, max left right)
-        | `Both ((Unit, _), (String, _))
-        | `Both ((String, _), (Unit, _)) -> Error `Incompatible_types
+      let merger = function
+        | `Left Env.One | `Right Env.One -> Env.Option
+        | `Left t | `Right t -> t
+        | `Both (l, r) -> max l r
       in
-      Env.merge_result merger env1 env2
-  | Pattern.Optional doc ->
-      let* env = infer doc in
-      Ok (Env.map Type.Dynamic.optionize env)
-  | Pattern.One_or_more doc ->
-      let* env = infer doc in
-      Ok (Env.map (function x, _ -> x, Type.Dynamic.List) env)
-
+      Env.merge merger (infer left) (infer right)
+  | Pattern.Optional pattern ->
+      infer pattern |> Env.map (function 
+        | Env.One -> Env.Option 
+        | a -> a
+      )
+  | Pattern.One_or_more pattern ->
+      infer pattern |> Env.map (function _ -> Env.List)
+      
 (** Match positional-only pattern against positional-only args *)
 (*let match_args ~env args =
   | Pattern.Argument a ->
