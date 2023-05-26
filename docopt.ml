@@ -15,6 +15,9 @@ module Atom = struct
     | Argument of string
     
   let compare = compare
+
+  let parse source = (* TODO: this is a temp stub *)
+    if String.starts_with ~prefix:"<" source then Argument source else Command source
 end
 
 module Env = struct 
@@ -41,7 +44,7 @@ module Pattern = struct
 end
 
 module Occurence = struct
-  type t = One | Maybe | Multiple
+  type t = One | Maybe | Multiple (* unit, bool, int; string; string option; string list *)
 
   let _invariant = assert (One < Maybe && Maybe < Multiple)
 
@@ -84,21 +87,40 @@ end
 
 module Type = struct
   type _ t =
-    | String: string t
-    | Int: int t
+    | Unit: unit t
     | Bool: bool t
-  (*| Unit: unit t*)
+    | Int: int t
+    | String: string t
+    | Option: 'a t ->  ('a option) t
+    | List: 'a t ->  ('a list) t
   (*| Pair: 'a t * 'b t -> ('a * 'b) t*)
 (*  | Bool
     | Enum of ...
-    | Option of t
-    | List of t
     | Pair of t * t *)
 
   let int_of_string source =
     match int_of_string_opt source with
     | Some n -> Ok n
     | None -> Error (`Can't_parse_x_expected_type (source, Int))
+
+  module Dynamic = struct
+    type t = 
+      | Unit
+      | Bool
+      | Int
+      | String
+      | Option of t
+      | List of t
+  end
+
+  let rec to_dynamic: type a. a t -> Dynamic.t = function
+    | Unit     -> Dynamic.Unit
+    | Bool     -> Dynamic.Bool
+    | Int      -> Dynamic.Int
+    | String   -> Dynamic.String
+    | Option t -> Dynamic.Option (to_dynamic t)
+    | List t   -> Dynamic.List (to_dynamic t)
+
 end
 
 
@@ -118,6 +140,18 @@ let term term_t atom = Term (term_t, atom)
 let map callback term = Map (callback, term)
 let both first second = Both (first, second)
 
+let rec infer
+  : type a. a t -> Type.Dynamic.t Env.t
+  = function
+  | Term (t, string) -> Env.singleton (Atom.parse string) (Type.to_dynamic t)
+  | Map (_callback, term) -> infer term
+  | Both (first, second) -> 
+      let merger = function
+        | `One t -> t
+        | `Both (left_t, right_t) when left_t = right_t -> left_t
+        | _ -> failwith "not implemented" (* TODO *)
+      in
+      Env.merge merger (infer first) (infer second)
 
 let rec eval
   : type a. argv:string list -> a t -> (a * string list, _) result
