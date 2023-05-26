@@ -4,9 +4,7 @@ let (=>) left right = print_char (if left = right then '.' else 'F')
 let (let+) term callback = Docopt.map callback term
 let (and+) = Docopt.both
 
-let env_to_list = function
-  | Ok m -> Ok (Docopt.Env.to_seq m |> List.of_seq)
-  | Error e -> Error e
+let env_to_list m = Docopt.Env.to_seq m |> List.of_seq
 
 
 
@@ -40,55 +38,60 @@ let _map_string_to_int_using_let_syntax =
   in
   Docopt.eval' term ~doc ~argv:["42"] => Ok (`Return 42)*)
 
-let _infer_type =
-  let doc = Docopt.Pattern.(Sequence (Argument "<x>", Command "a")) in
-  Docopt.infer doc |> env_to_list => Ok [
-    "<x>", Docopt.Type.Dynamic.(String, Scalar);
-    "a", Docopt.Type.Dynamic.(Unit, Scalar );
-  ]
-
-let _infer_repeating_sequence =
-  let doc = Docopt.Pattern.(Sequence (Argument "<x>", Argument "<x>")) in
-  Docopt.infer doc |> env_to_list => Ok [
-    "<x>", Docopt.Type.Dynamic.(String, List);
-  ]
-
-let _infer_optional_sequence =
-  let doc = Docopt.Pattern.(Optional (Argument "<x>")) in
-  Docopt.infer doc |> env_to_list => Ok [
-    "<x>", Docopt.Type.Dynamic.(String, Option);
-  ]
-
-let _infer_repeating_argument =
-  let doc = Docopt.Pattern.(One_or_more (Argument "<x>")) in
-  Docopt.infer doc |> env_to_list => Ok [
-    "<x>", Docopt.Type.Dynamic.(String, List);
-  ]
-
-let _infer_alternating_argument_command =
-  let doc = Docopt.Pattern.(Either (Argument "<x>", Command "c")) in
-  Docopt.infer doc |> env_to_list => Ok [
-    "<x>", Docopt.Type.Dynamic.(String, Option);
-    "c", Docopt.Type.Dynamic.(Unit, Option);
-  ]
-
-let _infer_alternating_same_argument =
-  let doc = Docopt.Pattern.(Either (Argument "<x>", Argument "<x>")) in
-  Docopt.infer doc |> env_to_list => Ok [
-    "<x>", Docopt.Type.Dynamic.(String, Scalar);
-  ]
-
-let _infer_alternating_same_argument_different_collection =
-  let doc = Docopt.Pattern.(Either (Argument "<x>", Optional (Argument "<x>"))) in
-  Docopt.infer doc |> env_to_list => Ok [
-    "<x>", Docopt.Type.Dynamic.(String, Option);
-  ]
-
-let _infer_alternating_same_command_different_collection =
-  let doc = Docopt.Pattern.(Either (Command "c", One_or_more (Command "c"))) in
-  Docopt.infer doc |> env_to_list => Ok [
-    "c", Docopt.Type.Dynamic.(Unit, List);
-  ]
+  
+module Test_infer = struct
+  open Docopt.Pattern
+  open Docopt.Parameter
+  let _infer_type =
+    let pattern = Sequence (Parameter (Argument "<x>"), Parameter (Command "a")) in
+    Docopt.infer pattern |> env_to_list => Docopt.Env.[
+      Argument "<x>", One;
+      Command "a", One;
+    ]
+  
+  let _infer_repeating_sequence =
+    let pattern = Sequence (Parameter (Argument "<x>"), Parameter (Argument "<x>")) in
+    Docopt.infer pattern |> env_to_list => Docopt.Env.[
+      Argument "<x>", List;
+    ]
+  
+  let _infer_optional_sequence =
+    let pattern = Docopt.Pattern.(Optional (Parameter (Argument "<x>"))) in
+    Docopt.infer pattern |> env_to_list => Docopt.Env.[
+      Argument "<x>", Option;
+    ]
+  
+  let _infer_repeating_argument =
+    let pattern = One_or_more (Parameter (Argument "<x>")) in
+    Docopt.infer pattern |> env_to_list => Docopt.Env.[
+      Argument "<x>", List;
+    ]
+  
+  let _infer_alternating_argument_command =
+    let pattern = Either (Parameter (Argument "<x>"), Parameter (Command "c")) in
+    Docopt.infer pattern |> env_to_list => Docopt.Env.[
+      Argument "<x>", Option;
+      Command "c", Option;
+    ]
+  
+  let _infer_alternating_same_argument =
+    let pattern = Docopt.Pattern.(Either (Parameter (Argument "<x>"), Parameter (Argument "<x>"))) in
+    Docopt.infer pattern |> env_to_list => Docopt.Env.[
+      Argument "<x>", One;
+    ]
+  
+  let _infer_alternating_same_argument_different_collection =
+    let pattern = Either (Parameter (Argument "<x>"), Optional (Parameter (Argument "<x>"))) in
+    Docopt.infer pattern |> env_to_list => Docopt.Env.[
+      Argument "<x>", Option;
+    ]
+  
+  let _infer_alternating_same_command_different_collection =
+    let pattern = Docopt.Pattern.(Either (Parameter (Command "c"), One_or_more (Parameter (Command "c")))) in
+    Docopt.infer pattern |> env_to_list => Docopt.Env.[
+      Command "c", List;
+    ]
+end
 (*let _infer_type =
   let doc = "Usage: prog a [b] c... <x> [<y>] <z>..." in
   let argv = ["set"; "1"; "2"] in

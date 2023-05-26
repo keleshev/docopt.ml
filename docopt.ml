@@ -5,24 +5,22 @@ let hello = "world"
 
 let (let*) = Result.bind
 
-module Map = struct 
-  include Map.Make (String)
+module Parameter = struct
+  type option =
+    | Long of string
+    | Short of string
 
-  let merge_result (type e) (callback: string -> _ -> (_, e) result) left right =
-    let exception Break of e in
-    let merger key left right =
-      let result = match left, right with
-        | Some one, None -> callback key (`Left one)
-        | None, Some one -> callback key (`Right one)
-        | Some l, Some r -> callback key (`Both (l, r))
-        | None, None -> assert false
-      in
-      match result with
-      | Ok x -> Some x
-      | Error e -> raise_notrace (Break e)
-    in
-    try Ok (merge merger left right)
-    with Break e -> Error e
+  type t =
+    | Command of string
+    | Argument of string
+    
+  let compare = compare
+end
+
+module Env = struct 
+  include Map.Make (Parameter)
+
+  type arity = One | Option | List
 
   let merge callback left right =
     let merger _key left right =
@@ -36,15 +34,8 @@ module Map = struct
 end
 
 module Pattern = struct
-  type option =
-    | Long of string
-    | Short of char
-
   type t =
-    | Command of string
-    | Argument of string
-  (*| Option of option * string option*)
-    (*| Atom of atom*)
+    | Parameter of Parameter.t
     | Sequence of t * t
     | Optional of t
     | Either of t * t
@@ -78,54 +69,12 @@ module Type = struct
     match int_of_string_opt source with
     | Some n -> Ok n
     | None -> Error (`Can't_parse_x_expected_type (source, Int))
-
-  module Dynamic = struct
-    (*type scalar = Unit | String
-
-    type t =
-      | Scalar of scalar
-      | Option of scalar
-      | List of scalar*)
-
-    type collection = Scalar | Option | List
-    type base = Unit | String
-    type t = base * collection
-
-    let optionize: t -> t = function
-      | x, Scalar -> x, Option
-      | t -> t
-
-    let default_value = function
-      | Unit,   Scalar -> Value.Unit
-      | Unit,   Option -> Value.Bool false
-      | Unit,   List   -> Value.Int 0
-      | String, Scalar -> Value.String ""
-      | String, Option -> Value.Option None
-      | String, List   -> Value.List []
-  end
-end
-
-module Env = struct
-  type arity = One | Option | List
-  type t = {commands: arity Map.t; arguments: arity Map.t}
-
-  let map callback {commands; arguments} =
-    let commands = Map.map callback commands in
-    let arguments = Map.map callback arguments in
-    {commands; arguments}
-
-  let merge callback map1 map2 =
-    let commands = Map.merge callback map1.commands map2.commands in
-    let arguments = Map.merge callback map1.arguments map2.arguments in
-    {commands; arguments}
 end
 
 
 let rec infer = function
-  | Pattern.Argument a ->
-      Env.{commands=Map.empty; arguments=Map.singleton a One}
-  | Pattern.Command c ->
-      Env.{commands=Map.singleton c One; arguments=Map.empty}
+  | Pattern.Parameter p ->
+      Env.singleton p Env.One
   | Pattern.Sequence (left, right) -> 
       let merger = function
         | `Left t | `Right t -> t
