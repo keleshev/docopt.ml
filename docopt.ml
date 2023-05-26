@@ -5,7 +5,7 @@ let hello = "world"
 
 let (let*) = Result.bind
 
-module Parameter = struct
+module Atom = struct
   type option =
     | Long of string
     | Short of string
@@ -18,15 +18,13 @@ module Parameter = struct
 end
 
 module Env = struct 
-  include Map.Make (Parameter)
-
-  type arity = One | Option | List
+  include Map.Make (Atom)
 
   let merge callback left right =
     let merger _key left right =
       match left, right with
-        | Some one, None -> Some (callback (`Left one))
-        | None, Some one -> Some (callback (`Right one))
+        | Some one, None -> Some (callback (`Once one))
+        | None, Some one -> Some (callback (`Once one))
         | Some l, Some r -> Some (callback (`Both (l, r)))
         | None, None -> assert false
     in
@@ -35,11 +33,43 @@ end
 
 module Pattern = struct
   type t =
-    | Parameter of Parameter.t
+    | Discrete of Atom.t
     | Sequence of t * t
     | Optional of t
-    | Either of t * t
-    | One_or_more of t
+    | Junction of t * t
+    | Multiple of t
+end
+
+module Occurence = struct
+  type t = One | Maybe | Multiple
+
+  let _invariant = assert (One < Maybe && Maybe < Multiple)
+
+  let rec infer = function
+    | Pattern.Discrete atom ->
+        Env.singleton atom One
+    | Pattern.Sequence (left, right) -> 
+        let merger = function
+          | `Once t -> t
+          | `Both _ -> Multiple
+        in
+        Env.merge merger (infer left) (infer right)
+    | Pattern.Junction (left, right) ->
+        let merger = function
+          | `Once One -> Maybe
+          | `Once t -> t
+          | `Both (l, r) -> max l r
+        in
+        Env.merge merger (infer left) (infer right)
+    | Pattern.Optional pattern ->
+        let mapper = function
+          | One -> Maybe
+          | other -> other
+        in
+        Env.map mapper (infer pattern)
+    | Pattern.Multiple pattern ->
+        let mapper _ = Multiple in
+        Env.map mapper (infer pattern)
 end
 
 module Value = struct
@@ -72,30 +102,6 @@ module Type = struct
 end
 
 
-let rec infer = function
-  | Pattern.Parameter p ->
-      Env.singleton p Env.One
-  | Pattern.Sequence (left, right) -> 
-      let merger = function
-        | `Left t | `Right t -> t
-        | `Both _ -> Env.List
-      in
-      Env.merge merger (infer left) (infer right)
-  | Pattern.Either (left, right) ->
-      let merger = function
-        | `Left Env.One | `Right Env.One -> Env.Option
-        | `Left t | `Right t -> t
-        | `Both (l, r) -> max l r
-      in
-      Env.merge merger (infer left) (infer right)
-  | Pattern.Optional pattern ->
-      infer pattern |> Env.map (function 
-        | Env.One -> Env.Option 
-        | a -> a
-      )
-  | Pattern.One_or_more pattern ->
-      infer pattern |> Env.map (function _ -> Env.List)
-      
 (** Match positional-only pattern against positional-only args *)
 (*let match_args ~env args =
   | Pattern.Argument a ->

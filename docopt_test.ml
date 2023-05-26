@@ -38,58 +38,59 @@ let _map_string_to_int_using_let_syntax =
   in
   Docopt.eval' term ~doc ~argv:["42"] => Ok (`Return 42)*)
 
+module Occurence = Docopt.Occurence
   
 module Test_infer = struct
   open Docopt.Pattern
-  open Docopt.Parameter
+  open Docopt.Atom
   let _infer_type =
-    let pattern = Sequence (Parameter (Argument "<x>"), Parameter (Command "a")) in
-    Docopt.infer pattern |> env_to_list => Docopt.Env.[
+    let pattern = Sequence (Discrete (Argument "<x>"), Discrete (Command "a")) in
+    Docopt.Occurence.infer pattern |> env_to_list => [
       Argument "<x>", One;
       Command "a", One;
     ]
   
   let _infer_repeating_sequence =
-    let pattern = Sequence (Parameter (Argument "<x>"), Parameter (Argument "<x>")) in
-    Docopt.infer pattern |> env_to_list => Docopt.Env.[
-      Argument "<x>", List;
+    let pattern = Sequence (Discrete (Argument "<x>"), Discrete (Argument "<x>")) in
+    Docopt.Occurence.infer pattern |> env_to_list => [
+      Argument "<x>", Occurence.Multiple;
     ]
   
   let _infer_optional_sequence =
-    let pattern = Docopt.Pattern.(Optional (Parameter (Argument "<x>"))) in
-    Docopt.infer pattern |> env_to_list => Docopt.Env.[
-      Argument "<x>", Option;
+    let pattern = Docopt.Pattern.(Optional (Discrete (Argument "<x>"))) in
+    Docopt.Occurence.infer pattern |> env_to_list => [
+      Argument "<x>", Occurence.Multiple;
     ]
   
   let _infer_repeating_argument =
-    let pattern = One_or_more (Parameter (Argument "<x>")) in
-    Docopt.infer pattern |> env_to_list => Docopt.Env.[
-      Argument "<x>", List;
+    let pattern = Multiple (Discrete (Argument "<x>")) in
+    Docopt.Occurence.infer pattern |> env_to_list => [
+      Argument "<x>", Occurence.Multiple;
     ]
   
   let _infer_alternating_argument_command =
-    let pattern = Either (Parameter (Argument "<x>"), Parameter (Command "c")) in
-    Docopt.infer pattern |> env_to_list => Docopt.Env.[
-      Argument "<x>", Option;
-      Command "c", Option;
+    let pattern = Junction (Discrete (Argument "<x>"), Discrete (Command "c")) in
+    Docopt.Occurence.infer pattern |> env_to_list => [
+      Argument "<x>", Occurence.Maybe;
+      Command "c", Occurence.Maybe;
     ]
   
   let _infer_alternating_same_argument =
-    let pattern = Docopt.Pattern.(Either (Parameter (Argument "<x>"), Parameter (Argument "<x>"))) in
-    Docopt.infer pattern |> env_to_list => Docopt.Env.[
+    let pattern = Docopt.Pattern.(Junction (Discrete (Argument "<x>"), Discrete (Argument "<x>"))) in
+    Docopt.Occurence.infer pattern |> env_to_list => [
       Argument "<x>", One;
     ]
   
   let _infer_alternating_same_argument_different_collection =
-    let pattern = Either (Parameter (Argument "<x>"), Optional (Parameter (Argument "<x>"))) in
-    Docopt.infer pattern |> env_to_list => Docopt.Env.[
-      Argument "<x>", Option;
+    let pattern = Junction (Discrete (Argument "<x>"), Optional (Discrete (Argument "<x>"))) in
+    Docopt.Occurence.infer pattern |> env_to_list => [
+      Argument "<x>", Occurence.Maybe;
     ]
   
   let _infer_alternating_same_command_different_collection =
-    let pattern = Docopt.Pattern.(Either (Parameter (Command "c"), One_or_more (Parameter (Command "c")))) in
-    Docopt.infer pattern |> env_to_list => Docopt.Env.[
-      Command "c", List;
+    let pattern = Docopt.Pattern.(Junction (Discrete (Command "c"), Multiple (Discrete (Command "c")))) in
+    Docopt.Occurence.infer pattern |> env_to_list => [
+      Command "c", Occurence.Multiple;
     ]
 end
 (*let _infer_type =
