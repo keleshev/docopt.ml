@@ -46,8 +46,8 @@ module Test_infer = struct
   let _infer_type =
     let pattern = Sequence (Discrete (Argument "<x>"), Discrete (Command "a")) in
     Docopt.Occurence.infer pattern |> env_to_list => [
-      Argument "<x>", One;
-      Command "a", One;
+      Argument "<x>", Required;
+      Command "a", Required;
     ]
   
   let _infer_repeating_sequence =
@@ -71,20 +71,20 @@ module Test_infer = struct
   let _infer_alternating_argument_command =
     let pattern = Junction (Discrete (Argument "<x>"), Discrete (Command "c")) in
     Docopt.Occurence.infer pattern |> env_to_list => [
-      Argument "<x>", Occurence.Maybe;
-      Command "c", Occurence.Maybe;
+      Argument "<x>", Occurence.Optional;
+      Command "c", Occurence.Optional;
     ]
   
   let _infer_alternating_same_argument =
     let pattern = Docopt.Pattern.(Junction (Discrete (Argument "<x>"), Discrete (Argument "<x>"))) in
     Docopt.Occurence.infer pattern |> env_to_list => [
-      Argument "<x>", One;
+      Argument "<x>", Required;
     ]
   
   let _infer_alternating_same_argument_different_collection =
     let pattern = Junction (Discrete (Argument "<x>"), Optional (Discrete (Argument "<x>"))) in
     Docopt.Occurence.infer pattern |> env_to_list => [
-      Argument "<x>", Occurence.Maybe;
+      Argument "<x>", Occurence.Optional;
     ]
   
   let _infer_alternating_same_command_different_collection =
