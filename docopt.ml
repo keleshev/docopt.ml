@@ -138,6 +138,15 @@ module Value = struct
     | String of string 
     | Option of string option
     | List of string list
+
+  let default_for atom occurence =
+    match atom, occurence with
+    | Atom.Argument _, Occurence.Required -> String ""
+    | Atom.Argument _, Occurence.Optional -> Option None
+    | Atom.Argument _, Occurence.Multiple -> List []
+    | Atom.Command  _, Occurence.Required -> Unit
+    | Atom.Command  _, Occurence.Optional -> Bool false
+    | Atom.Command  _, Occurence.Multiple -> Int 0
 end
 
 module Type = struct
@@ -264,6 +273,9 @@ let type_check type_env occurence_env =
     ) set errors
   ) type_env [] in
   if errors = [] then Ok () else Error errors
+
+let defaults_of_occurence env =
+  Env.mapi Value.default_for env
 
 let rec eval
   : type a. argv:string list -> a t -> (a * string list, _) result
