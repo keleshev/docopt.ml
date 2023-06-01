@@ -155,12 +155,23 @@ module Type = struct
     | Bool: bool t
     | Int: int t
     | String: string t
-    | Option: 'a t ->  ('a option) t
-    | List: 'a t ->  ('a list) t
-  (*| Pair: 'a t * 'b t -> ('a * 'b) t*)
-(*  | Bool
-    | Enum of ...
-    | Pair of t * t *)
+    | Option: 'a t -> ('a option) t
+    | List: 'a t -> ('a list) t
+(*  | In_channel
+    | Out_channel
+    | Int32
+    | Int64
+    | Float
+    | Char | UChar ?
+    | Bytes ?
+    | Set ?
+    | Array: 'a t -> ('a array) t
+    | Seq: 'a t -> ('a Seq.t) t
+    | Result: 'a t -> 'e -> (('a, 'e) result) t
+        Docopt.(get (result string `Not_found)) "<param>"
+    | Enum: (string * 'enum) list -> 'enum t
+        Docopt.(get (enum ["hello", `hello; "goodbye", `goodbye])) "<param>"
+*)
 
   let int_of_string source =
     match int_of_string_opt source with
