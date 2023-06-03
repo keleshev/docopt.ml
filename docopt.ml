@@ -1,6 +1,36 @@
 let sprintf = Printf.sprintf
 
+module Catlist = struct
+  (* List with O(1) concatenation, but O(length) head *)
+ 
+  type 'a t = Empty | Singleton of 'a | Concat of 'a t * 'a t
+  (* invariant: for all Concat (x, y). x <> Empty && y <> Empty *)
+
+  let empty = Empty
+  let singleton x = Singleton x
+
+  let concat a b =
+    match a, b with
+    | Empty, y -> y
+    | x, Empty -> x
+    | x, y -> Concat (x, y)
+
+  let cons item = function
+    | Emtpy -> Singleton item
+    | other -> Concat (Singleton item, other)
+
+  let concat_map f = function
+    | Emtpy -> Empty
+    | Singleton s -> f s
+    | Concat (x, y) -> concat (f x) (f y)
+
+  let bind t f = concat_map f t
+end
+
 module Levenshtein = struct
+  (** Edit distance to give spelling hints *)
+
+
   (** Bounded Levenshtein distance
   
       As described in https://www.baeldung.com/cs/levenshtein-distance-computation
@@ -87,10 +117,53 @@ module Pattern = struct
   type t =
     | Discrete of Atom.t (* <x>       *)
     | Sequence of t * t  (* <x> <y>   *)
-    | Optional of t      (* [<x>]     *)
     | Junction of t * t  (* <x> | <y> *)
+    | Optional of t      (* [<x>]     *)
     | Multiple of t      (* <x>...    *)
+
+  module Match = struct
+    open Atom
+    let (let*) l f = List.concat_map f l
+
+    (* [<x>] <y>    y *)
+
+    (* (<x> <y> | <z>) <w>    x y z w  *)
+
+    (* <x>... <z>    x z w  *)
+ 
+    (* <x> [<y>] [<z>] <w> - Report ambiguous grammars? 
+       [-xyz] vs [x y] meaning? 
+       Matching performance? *)
+
+    let rec perform pattern argv acc =
+      match pattern, argv with
+      | Discrete (Argument a), _head :: rest -> [a :: acc, rest]
+      | Discrete (Argument _), _ -> []
+      | Discrete (Command c), head :: rest when c = head -> [c :: acc, rest]
+      | Discrete (Command _), _ -> []
+      | Sequence (left, right), argv ->
+          let* acc, argv = perform left argv acc in
+          perform right argv acc
+      | Junction (left, right), argv ->
+          perform left argv acc @ perform right argv acc
+      | Optional pattern, argv ->
+          ([], argv) :: perform pattern argv acc
+      | Multiple inner, argv ->
+          let* acc, argv = perform inner argv acc in
+          (acc, argv) :: perform pattern argv acc
+      
+    module Test = struct      
+      let x, y = Discrete (Argument "<x>"), Discrete (Argument "<y>") in
+      let _c, _d = Discrete (Command "c"), Discrete (Command "d") in
+      assert (perform x ["x"] [] = [["<x>"], []]);
+      assert (perform x ["x"] [] = [["<x>"], []]);
+      assert (perform (Sequence (x, y)) ["x"; "y"] [] = [["<y>"; "<x>"], []]);
+      assert (perform (Junction (x, y)) ["a"] [] = [["<x>"], []; ["<y>"], []]);
+      assert (perform (Sequence (Multiple x, y)) ["a"; "b"] [] = [["<y>"; "<x>"], []]);
+    end
+  end
 end
+
 
 module Occurence = struct
   type t =     (* Argument | Command *)
