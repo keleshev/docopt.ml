@@ -16,15 +16,24 @@ module Catlist = struct
     | x, y -> Concat (x, y)
 
   let cons item = function
-    | Emtpy -> Singleton item
+    | Empty -> Singleton item
     | other -> Concat (Singleton item, other)
 
-  let concat_map f = function
-    | Emtpy -> Empty
+  let rec concat_map f = function
+    | Empty -> Empty
     | Singleton s -> f s
-    | Concat (x, y) -> concat (f x) (f y)
+    | Concat (x, y) -> concat (concat_map f x) (concat_map f y)
 
   let bind t f = concat_map f t
+
+  let rec find predicate = function
+    | Empty -> None
+    | Singleton s when predicate s -> Some s
+    | Singleton _ -> None
+    | Concat (left, right) ->
+        match find predicate left with
+        | Some _ as result -> result
+        | None -> find predicate right
 end
 
 module Levenshtein = struct
@@ -123,7 +132,7 @@ module Pattern = struct
 
   module Match = struct
     open Atom
-    let (let*) l f = List.concat_map f l
+    let (let*) = Catlist.bind
 
     (* [<x>] <y>    y *)
 
@@ -132,34 +141,46 @@ module Pattern = struct
     (* <x>... <z>    x z w  *)
  
     (* <x> [<y>] [<z>] <w> - Report ambiguous grammars? 
+       How to report a matching error?
        [-xyz] vs [x y] meaning? 
        Matching performance? *)
 
-    let rec perform pattern argv acc =
+    let rec prefix pattern argv acc =
       match pattern, argv with
-      | Discrete (Argument a), _head :: rest -> [a :: acc, rest]
-      | Discrete (Argument _), _ -> []
-      | Discrete (Command c), head :: rest when c = head -> [c :: acc, rest]
-      | Discrete (Command _), _ -> []
+      | Discrete (Argument a), _head :: rest -> 
+          Catlist.singleton (a :: acc, rest)
+      | Discrete (Command c), head :: rest when c = head ->
+          Catlist.singleton (c :: acc, rest)
+      | Discrete (Argument _), _ ->
+          Catlist.empty
+      | Discrete (Command _), _ ->
+          Catlist.empty
       | Sequence (left, right), argv ->
-          let* acc, argv = perform left argv acc in
-          perform right argv acc
+          let* acc, argv = prefix left argv acc in
+          prefix right argv acc
       | Junction (left, right), argv ->
-          perform left argv acc @ perform right argv acc
+          let left = prefix left argv acc
+          and right = prefix right argv acc in
+          Catlist.concat left right
       | Optional pattern, argv ->
-          ([], argv) :: perform pattern argv acc
+          Catlist.cons ([], argv) (prefix pattern argv acc)
       | Multiple inner, argv ->
-          let* acc, argv = perform inner argv acc in
-          (acc, argv) :: perform pattern argv acc
+          let* acc, argv = prefix inner argv acc in
+          Catlist.cons (acc, argv) (prefix pattern argv acc)
+
+    let completely pattern argv =
+      let results = prefix pattern argv [] in
+      Catlist.find (fun (_log, argv) -> argv = []) results
       
     module Test = struct      
       let x, y = Discrete (Argument "<x>"), Discrete (Argument "<y>") in
       let _c, _d = Discrete (Command "c"), Discrete (Command "d") in
-      assert (perform x ["x"] [] = [["<x>"], []]);
+      (*assert (perform x ["x"] [] = [["<x>"], []]);
       assert (perform x ["x"] [] = [["<x>"], []]);
       assert (perform (Sequence (x, y)) ["x"; "y"] [] = [["<y>"; "<x>"], []]);
-      assert (perform (Junction (x, y)) ["a"] [] = [["<x>"], []; ["<y>"], []]);
-      assert (perform (Sequence (Multiple x, y)) ["a"; "b"] [] = [["<y>"; "<x>"], []]);
+      assert (perform (Junction (x, y)) ["a"] [] = [["<x>"], []; ["<y>"], []]);*)
+      assert (completely (Sequence (Multiple x, y)) ["a"; "b"]
+              = Some (["<y>"; "<x>"], []));
     end
   end
 end
