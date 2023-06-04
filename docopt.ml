@@ -131,8 +131,17 @@ module Pattern = struct
     | Multiple of t      (* <x>...    *)
 
   module Match = struct
-    open Atom
-    let (let*) = Catlist.bind
+    module Log = struct
+      (** Instead of adding matches to a Map in O(log(n)) in many branches that
+          might be discarded, add succesfull matches to a log in O(1), then
+          build the Map once. *)
+
+      type entry =
+        | MatchedArgument of string * string
+        | MatchedCommand of string
+
+      type t = entry list
+    end
 
     (* [<x>] <y>    y *)
 
@@ -145,28 +154,30 @@ module Pattern = struct
        [-xyz] vs [x y] meaning? 
        Matching performance? *)
 
-    let rec prefix pattern argv acc =
+    let rec prefix pattern argv log =
+      let open Atom in let open Log in
+      let (let*) = Catlist.bind in
       match pattern, argv with
-      | Discrete (Argument a), _head :: rest -> 
-          Catlist.singleton (a :: acc, rest)
-      | Discrete (Command c), head :: rest when c = head ->
-          Catlist.singleton (c :: acc, rest)
+      | Discrete (Argument a), value :: rest -> 
+          Catlist.singleton (MatchedArgument (a, value) :: log, rest)
+      | Discrete (Command c), value :: rest when c = value ->
+          Catlist.singleton (MatchedCommand c :: log, rest)
       | Discrete (Argument _), _ ->
           Catlist.empty
       | Discrete (Command _), _ ->
           Catlist.empty
       | Sequence (left, right), argv ->
-          let* acc, argv = prefix left argv acc in
-          prefix right argv acc
+          let* log, argv = prefix left argv log in
+          prefix right argv log
       | Junction (left, right), argv ->
-          let left = prefix left argv acc
-          and right = prefix right argv acc in
+          let left = prefix left argv log
+          and right = prefix right argv log in
           Catlist.concat left right
       | Optional pattern, argv ->
-          Catlist.cons ([], argv) (prefix pattern argv acc)
+          Catlist.cons ([], argv) (prefix pattern argv log)
       | Multiple inner, argv ->
-          let* acc, argv = prefix inner argv acc in
-          Catlist.cons (acc, argv) (prefix pattern argv acc)
+          let* log, argv = prefix inner argv log in
+          Catlist.cons (log, argv) (prefix pattern argv log)
 
     let completely pattern argv =
       let results = prefix pattern argv [] in
@@ -180,7 +191,8 @@ module Pattern = struct
       assert (perform (Sequence (x, y)) ["x"; "y"] [] = [["<y>"; "<x>"], []]);
       assert (perform (Junction (x, y)) ["a"] [] = [["<x>"], []; ["<y>"], []]);*)
       assert (completely (Sequence (Multiple x, y)) ["a"; "b"]
-              = Some (["<y>"; "<x>"], []));
+              = Some ([MatchedArgument ("<y>", "b");
+                       MatchedArgument ("<x>", "a")], []));
     end
   end
 end
@@ -232,7 +244,7 @@ module Value = struct
     | String of string 
     | Option of string option
     | List of string list
-
+  
   let default_for atom occurence =
     match atom, occurence with
     | Atom.Argument _, Occurence.Required -> String ""
