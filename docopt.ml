@@ -95,6 +95,15 @@ module MapMake (X: sig type t val compare : t -> t -> int end) = struct
     in
     merge merger left right
 
+(*  let merge ~one ~both left right =
+    let merger _key left right =
+      match left, right with
+      | Some x, None -> | None, Some one -> Some (one x)
+      | Some l, Some r -> Some (both (l, r))
+      | None, None -> assert false
+    in
+    merge merger left right*)
+
   let union callback left right =
     union (fun _key l r -> Some (callback l r)) left right
 
@@ -266,6 +275,40 @@ module Occurence = struct
     | Optional, Toggle -> Value.Bool false
     | Multiple, Toggle -> Value.Int 0
 end
+
+module Defaults = struct
+  open Value
+
+  let rec infer = function
+    | Pattern.Discrete (Argument a) ->
+        Map.singleton a Value.(String "")
+    | Pattern.Discrete (Command c) ->
+        Map.singleton c Value.Unit
+    | Pattern.Sequence (left, right) -> 
+        let unioner _ = function
+          | (String _ | Option _ | List _) -> List []
+          | (Unit | Bool _ | Int _) -> Int 0 in
+        Map.union unioner (infer left) (infer right)
+    | Pattern.Junction (left, right) ->
+        let merger = function
+          | `Once (String _) -> Option None
+          | `Once Unit -> Bool false
+          | `Once t -> t
+          | `Both (l, r) -> max l r in
+        Map.merge merger (infer left) (infer right)
+    | Pattern.Optional pattern ->
+        let mapper = function
+          | String _ -> Option None
+          | Unit -> Bool false
+          | other -> other in
+        Map.map mapper (infer pattern)
+    | Pattern.Multiple pattern ->
+        let mapper = function
+          | (String _ | Option _ | List _) -> List []
+          | (Unit | Bool _ | Int _) -> Int 0 in
+        Map.map mapper (infer pattern)
+end  
+
 
 module Type = struct
   type _ t =
