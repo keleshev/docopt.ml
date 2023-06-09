@@ -1,5 +1,6 @@
 let sprintf = Printf.sprintf
 
+
 module Catlist = struct
   (* List with O(1) concatenation, but O(length) head *)
  
@@ -11,8 +12,7 @@ module Catlist = struct
 
   let concat a b =
     match a, b with
-    | Empty, y -> y
-    | x, Empty -> x
+    | Empty, x | x, Empty -> x
     | x, y -> Concat (x, y)
 
   let cons item = function
@@ -20,9 +20,9 @@ module Catlist = struct
     | other -> Concat (Singleton item, other)
 
   let rec concat_map f = function
-    | Empty -> Empty
     | Singleton s -> f s
     | Concat (x, y) -> concat (concat_map f x) (concat_map f y)
+    | other -> other
 
   let bind t f = concat_map f t
 
@@ -38,7 +38,6 @@ end
 
 module Levenshtein = struct
   (** Edit distance to give spelling hints *)
-
 
   (** Bounded Levenshtein distance
   
@@ -83,6 +82,26 @@ module Levenshtein = struct
 
 end
 
+module Map = struct (* Extend Map with more ergonimic functions *)
+  module Make (X: sig type t val compare : t -> t -> int end) = struct
+    include Map.Make(X)
+
+    let merge callback left right =
+      let merger _key left right =
+        match left, right with
+        | Some one, None -> Some (callback (`Once one))
+        | None, Some one -> Some (callback (`Once one))
+        | Some l, Some r -> Some (callback (`Both (l, r)))
+        | None, None -> assert false
+      in
+      merge merger left right
+
+    let union callback left right =
+      union (fun _key l r -> Some (callback l r)) left right
+
+    let keys t = fold (fun key _value list -> List.cons key list) t []
+  end
+end
 
 
 let hello = "world"
@@ -90,6 +109,15 @@ let hello = "world"
 let (let*) = Result.bind
 
 module Atom = struct
+  (* Toggle
+     Valued 
+     Switch
+     Capture
+     Strand
+     String
+     Label
+     Variable
+   *)
   type option =
     | Long of string
     | Short of string
@@ -104,23 +132,10 @@ module Atom = struct
 
   let parse source = (* TODO: this is a temp stub *)
     if String.starts_with ~prefix:"<" source then Argument source else Command source
+
+  module Map = Map.Make (struct type nonrec t = t let compare = compare end)
 end
 
-module Env = struct 
-  include Map.Make (Atom)
-
-  let merge callback left right =
-    let merger _key left right =
-      match left, right with
-        | Some one, None -> Some (callback (`Once one))
-        | None, Some one -> Some (callback (`Once one))
-        | Some l, Some r -> Some (callback (`Both (l, r)))
-        | None, None -> assert false
-    in
-    merge merger left right
-
-  let keys t = fold (fun key _value list -> List.cons key list) t []
-end
 
 module Pattern = struct
   type t =
@@ -211,29 +226,24 @@ module Occurence = struct
 
   let rec infer = function
     | Pattern.Discrete atom ->
-        Env.singleton atom Required
+        Atom.Map.singleton atom Required
     | Pattern.Sequence (left, right) -> 
-        let merger = function
-          | `Once t -> t
-          | `Both _ -> Multiple
-        in
-        Env.merge merger (infer left) (infer right)
+        Atom.Map.union (fun _ _ -> Multiple) (infer left) (infer right)
     | Pattern.Junction (left, right) ->
         let merger = function
           | `Once Required -> Optional
           | `Once t -> t
           | `Both (l, r) -> max l r
         in
-        Env.merge merger (infer left) (infer right)
+        Atom.Map.merge merger (infer left) (infer right)
     | Pattern.Optional pattern ->
         let mapper = function
           | Required -> Optional
           | other -> other
         in
-        Env.map mapper (infer pattern)
+        Atom.Map.map mapper (infer pattern)
     | Pattern.Multiple pattern ->
-        let mapper _ = Multiple in
-        Env.map mapper (infer pattern)
+        Atom.Map.map (fun _ -> Multiple) (infer pattern)
 end
 
 module Value = struct
@@ -354,29 +364,25 @@ let both first second = Both (first, second)
 
 (** Infer an environment of all type annotations *)
 let rec infer
-  : type a. a t -> Type.Dynamic.Set.t Env.t
+  : type a. a t -> Type.Dynamic.Set.t Atom.Map.t
   = let module Set = Type.Dynamic.Set in function
   | Term (t, string) -> 
       let set = Set.singleton (Type.to_dynamic t) in
-      Env.singleton (Atom.parse string) set
+      Atom.Map.singleton (Atom.parse string) set
   | Map (_callback, term) -> infer term
   | Both (first, second) -> 
-      let merger = function
-        | `Once set -> set
-        | `Both (left_set, right_set) -> Set.union left_set right_set
-      in
-      Env.merge merger (infer first) (infer second)
+      Atom.Map.union Set.union (infer first) (infer second)
 
 
 let type_check type_env occurence_env =
-  let errors = Env.fold (fun atom set errors ->
+  let errors = Atom.Map.fold (fun atom set errors ->
     Type.Dynamic.Set.fold (fun dynamic_type errors ->
-       match Env.find_opt atom occurence_env with
+       match Atom.Map.find_opt atom occurence_env with
        | None ->
            let error = `Atom_not_found (
              Atom.to_string atom, 
              Type.Dynamic.to_string dynamic_type,
-             Env.keys occurence_env |> List.map Atom.to_string) in
+             Atom.Map.keys occurence_env |> List.map Atom.to_string) in
            error :: errors
        | Some occurence ->
            if Type.Dynamic.is_compatible atom occurence dynamic_type then
@@ -391,13 +397,19 @@ let type_check type_env occurence_env =
   ) type_env [] in
   if errors = [] then Ok () else Error errors
 
-let defaults_of_occurence env =
-  Env.mapi Value.default_for env
+let run
+  : type a. argv:string list -> doc:Pattern.t -> a t -> (a, _) result
+  = fun ~argv:_argv ~doc term ->
 
-let rec eval
-  : type a. argv:string list -> a t -> (a * string list, _) result
-  = fun ~argv -> function
-
+  let type_env = infer term in
+  let occurence_env = Occurence.infer doc in
+  let* () = type_check type_env occurence_env in
+  let _defaults = Atom.Map.mapi Value.default_for occurence_env in
+  failwith "not implemented"
+  (*let env = Pattern.Match.run doc defaults in
+  eval term ~env*)
+  
+(*
   | Term (Type.String, a) -> begin
       match argv with
       | head :: tail -> Ok (head, tail)
@@ -424,4 +436,4 @@ let rec eval
       let* right_value, argv = eval ~argv right in
       Ok ((left_value, right_value), argv)
 
-  | _ -> failwith "not implemented"      
+  | _ -> failwith "not implemented"       *)
