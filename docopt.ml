@@ -82,27 +82,26 @@ module Levenshtein = struct
 
 end
 
-module Map = struct (* Extend Map with more ergonimic functions *)
-  module Make (X: sig type t val compare : t -> t -> int end) = struct
-    include Map.Make(X)
+module MapMake (X: sig type t val compare : t -> t -> int end) = struct
+  include Map.Make(X)
 
-    let merge callback left right =
-      let merger _key left right =
-        match left, right with
-        | Some one, None -> Some (callback (`Once one))
-        | None, Some one -> Some (callback (`Once one))
-        | Some l, Some r -> Some (callback (`Both (l, r)))
-        | None, None -> assert false
-      in
-      merge merger left right
+  let merge callback left right =
+    let merger _key left right =
+      match left, right with
+      | Some one, None -> Some (callback (`Once one))
+      | None, Some one -> Some (callback (`Once one))
+      | Some l, Some r -> Some (callback (`Both (l, r)))
+      | None, None -> assert false
+    in
+    merge merger left right
 
-    let union callback left right =
-      union (fun _key l r -> Some (callback l r)) left right
+  let union callback left right =
+    union (fun _key l r -> Some (callback l r)) left right
 
-    let keys t = fold (fun key _value list -> List.cons key list) t []
-  end
+  let keys t = fold (fun key _value list -> List.cons key list) t []
 end
 
+module Map = MapMake (String)
 
 let hello = "world"
 
@@ -133,7 +132,7 @@ module Atom = struct
   let parse source = (* TODO: this is a temp stub *)
     if String.starts_with ~prefix:"<" source then Argument source else Command source
 
-  module Map = Map.Make (struct type nonrec t = t let compare = compare end)
+  module Map = MapMake (struct type nonrec t = t let compare = compare end)
 end
 
 
@@ -212,40 +211,6 @@ module Pattern = struct
   end
 end
 
-
-module Occurence = struct
-  type t =     (* Argument | Command *)
-    | Required (* <a>      | c       *)
-    | Optional (* [<a>]    | [c]     *)
-    | Multiple (* <a>...   | c...    *)
-
-  let _invariant = assert (Required < Optional && Optional < Multiple)
-
-  let to_string = function
-    | Required -> "required" | Optional -> "optional" | Multiple -> "multiple"
-
-  let rec infer = function
-    | Pattern.Discrete atom ->
-        Atom.Map.singleton atom Required
-    | Pattern.Sequence (left, right) -> 
-        Atom.Map.union (fun _ _ -> Multiple) (infer left) (infer right)
-    | Pattern.Junction (left, right) ->
-        let merger = function
-          | `Once Required -> Optional
-          | `Once t -> t
-          | `Both (l, r) -> max l r
-        in
-        Atom.Map.merge merger (infer left) (infer right)
-    | Pattern.Optional pattern ->
-        let mapper = function
-          | Required -> Optional
-          | other -> other
-        in
-        Atom.Map.map mapper (infer pattern)
-    | Pattern.Multiple pattern ->
-        Atom.Map.map (fun _ -> Multiple) (infer pattern)
-end
-
 module Value = struct
   type t = 
     | Unit 
@@ -254,15 +219,52 @@ module Value = struct
     | String of string 
     | Option of string option
     | List of string list
+end
+
+module Occurence = struct
+  type plurality = (* String | Toggle *)
+    | Required     (* <a>    | c      *)
+    | Optional     (* [<a>]  | [c]    *)
+    | Multiple     (* <a>... | c...   *)
+
+  type capture =
+    | Toggle (* Flag, command, option without argument *)
+    | String (* Argument, option with argument *)
+
+  type t = plurality * capture
+
+  let _invariant = assert (Required < Optional && Optional < Multiple)
+
+  let to_string _ = "TODO"
+
+  let rec infer = function
+    | Pattern.Discrete (Argument a) ->
+        Map.singleton a (Required, String)
+    | Pattern.Discrete (Command c) ->
+        Map.singleton c (Required, Toggle)
+    | Pattern.Sequence (left, right) -> 
+        Map.union (fun _ (_, x) -> Multiple, x) (infer left) (infer right)
+    | Pattern.Junction (left, right) ->
+        let merger = function
+          | `Once (Required, x) -> Optional, x
+          | `Once t -> t
+          | `Both ((l, _), (r, x)) -> max l r, x in
+        Map.merge merger (infer left) (infer right)
+    | Pattern.Optional pattern ->
+        let mapper = function
+          | Required, x -> Optional, x
+          | other -> other in
+        Map.map mapper (infer pattern)
+    | Pattern.Multiple pattern ->
+        Map.map (fun (_, x) -> Multiple, x) (infer pattern)
   
-  let default_for atom occurence =
-    match atom, occurence with
-    | Atom.Argument _, Occurence.Required -> String ""
-    | Atom.Argument _, Occurence.Optional -> Option None
-    | Atom.Argument _, Occurence.Multiple -> List []
-    | Atom.Command  _, Occurence.Required -> Unit
-    | Atom.Command  _, Occurence.Optional -> Bool false
-    | Atom.Command  _, Occurence.Multiple -> Int 0
+  let default_value = function
+    | Required, String -> Value.String ""
+    | Optional, String -> Value.Option None
+    | Multiple, String -> Value.List []
+    | Required, Toggle -> Value.Unit
+    | Optional, Toggle -> Value.Bool false
+    | Multiple, Toggle -> Value.Int 0
 end
 
 module Type = struct
@@ -320,16 +322,14 @@ module Type = struct
       | Option t -> sprintf "(option %s)" (to_string t)
       | List t -> sprintf "(list %s)" (to_string t)
 
-    let is_compatible atom occurence dynamic_type =
-      match atom, occurence, dynamic_type with
-      | Atom.Argument _, Occurence.Required, t 
-      | Atom.Argument _, Occurence.Optional, Option t
-      | Atom.Argument _, Occurence.Multiple, List t when is_parsable t 
-          -> true
-      | Atom.Command _, Occurence.Required, Unit
-      | Atom.Command _, Occurence.Optional, Bool
-      | Atom.Command _, Occurence.Multiple, Int 
-          -> true
+    let is_compatible occurence dynamic_type =
+      match occurence, dynamic_type with
+      | Occurence.(Required, String), t
+      | Occurence.(Optional, String), Option t
+      | Occurence.(Multiple, String), List t when is_parsable t -> true
+      | Occurence.(Required, Toggle), Unit
+      | Occurence.(Optional, Toggle), Bool
+      | Occurence.(Multiple, Toggle), Int -> true
       | _ -> false
 
     module Set = Set.Make (struct type nonrec t = t let compare = compare end)
@@ -342,8 +342,9 @@ module Type = struct
     | String   -> Dynamic.String
     | Option t -> Dynamic.Option (to_dynamic t)
     | List t   -> Dynamic.List (to_dynamic t)
-
 end
+
+module Set = Type.Dynamic.Set
 
 
 (** Match positional-only pattern against positional-only args *)
@@ -364,35 +365,29 @@ let both first second = Both (first, second)
 
 (** Infer an environment of all type annotations *)
 let rec infer
-  : type a. a t -> Type.Dynamic.Set.t Atom.Map.t
-  = let module Set = Type.Dynamic.Set in function
+  : type a. a t -> Type.Dynamic.Set.t Map.t
+  = function
   | Term (t, string) -> 
       let set = Set.singleton (Type.to_dynamic t) in
-      Atom.Map.singleton (Atom.parse string) set
+      Map.singleton string set
   | Map (_callback, term) -> infer term
   | Both (first, second) -> 
-      Atom.Map.union Set.union (infer first) (infer second)
+      Map.union Set.union (infer first) (infer second)
 
 
 let type_check type_env occurence_env =
-  let errors = Atom.Map.fold (fun atom set errors ->
-    Type.Dynamic.Set.fold (fun dynamic_type errors ->
-       match Atom.Map.find_opt atom occurence_env with
+  let errors = Map.fold (fun atom set errors ->
+    Set.fold (fun dynamic_type errors ->
+       match Map.find_opt atom occurence_env with
        | None ->
-           let error = `Atom_not_found (
-             Atom.to_string atom, 
-             Type.Dynamic.to_string dynamic_type,
-             Atom.Map.keys occurence_env |> List.map Atom.to_string) in
-           error :: errors
+           let error = atom, Type.Dynamic.to_string dynamic_type, Map.keys occurence_env in
+           `Atom_not_found error :: errors
        | Some occurence ->
-           if Type.Dynamic.is_compatible atom occurence dynamic_type then
+           if Type.Dynamic.is_compatible occurence dynamic_type then
              errors
            else
-             let error = `Type_error (
-               Atom.to_string atom, 
-               Type.Dynamic.to_string dynamic_type,
-               Occurence.to_string occurence) in
-             error :: errors
+             let error = atom, Type.Dynamic.to_string dynamic_type, Occurence.to_string occurence in
+             `Type_error error :: errors
     ) set errors
   ) type_env [] in
   if errors = [] then Ok () else Error errors
@@ -404,7 +399,7 @@ let run
   let type_env = infer term in
   let occurence_env = Occurence.infer doc in
   let* () = type_check type_env occurence_env in
-  let _defaults = Atom.Map.mapi Value.default_for occurence_env in
+  let _defaults = Map.map Occurence.default_value occurence_env in
   failwith "not implemented"
   (*let env = Pattern.Match.run doc defaults in
   eval term ~env*)
