@@ -1,5 +1,6 @@
 let sprintf = Printf.sprintf
 
+let failwithf x = Printf.ksprintf failwith x
 
 module Catlist = struct
   (* List with O(1) concatenation, but O(length) head *)
@@ -82,50 +83,36 @@ module Levenshtein = struct
 
 end
 
-module MapMake (X: sig type t val compare : t -> t -> int end) = struct
-  include Map.Make(X)
+module Map = struct
+  include Map.Make(String)
 
-  let merge callback left right =
+  let merge ?(one=fun x -> x) ~both left right =
     let merger _key left right =
       match left, right with
-      | Some one, None -> Some (callback (`Once one))
-      | None, Some one -> Some (callback (`Once one))
-      | Some l, Some r -> Some (callback (`Both (l, r)))
+      | Some x, None | None, Some x -> Some (one x)
+      | Some l, Some r -> Some (both l r)
       | None, None -> assert false
     in
     merge merger left right
 
-(*  let merge ~one ~both left right =
-    let merger _key left right =
-      match left, right with
-      | Some x, None -> | None, Some one -> Some (one x)
-      | Some l, Some r -> Some (both (l, r))
-      | None, None -> assert false
-    in
-    merge merger left right*)
-
-  let union callback left right =
-    union (fun _key l r -> Some (callback l r)) left right
-
   let keys t = fold (fun key _value list -> List.cons key list) t []
+
+  (** Change value for key, fail if key not already present *)
+  let change key ~f map =
+    let f = function Some x -> Some (f x) | None -> failwithf "invalid key %S" key in
+    update key f map
 end
 
-module Map = MapMake (String)
+module List = struct
+  include List
+  let fold ~cons ~nil t = fold_right cons t nil
+end
 
 let hello = "world"
 
 let (let*) = Result.bind
 
 module Atom = struct
-  (* Toggle
-     Valued 
-     Switch
-     Capture
-     Strand
-     String
-     Label
-     Variable
-   *)
   type option =
     | Long of string
     | Short of string
@@ -134,14 +121,18 @@ module Atom = struct
     | Command of string
     | Argument of string
 
-  let to_string = function Command s | Argument s -> s
-    
-  let compare = compare
-
   let parse source = (* TODO: this is a temp stub *)
     if String.starts_with ~prefix:"<" source then Argument source else Command source
+end
 
-  module Map = MapMake (struct type nonrec t = t let compare = compare end)
+module Value = struct
+  type t = 
+    | Unit 
+    | Bool of bool 
+    | Int of int 
+    | String of string 
+    | Option of string option
+    | List of string list
 end
 
 
@@ -160,8 +151,8 @@ module Pattern = struct
           build the Map once. *)
 
       type entry =
-        | MatchedArgument of string * string
-        | MatchedCommand of string
+        | Captured of string * string
+        | Matched of string
 
       type t = entry list
     end
@@ -182,9 +173,9 @@ module Pattern = struct
       let (let*) = Catlist.bind in
       match pattern, argv with
       | Discrete (Argument a), value :: rest -> 
-          Catlist.singleton (MatchedArgument (a, value) :: log, rest)
+          Catlist.singleton (Captured (a, value) :: log, rest)
       | Discrete (Command c), value :: rest when c = value ->
-          Catlist.singleton (MatchedCommand c :: log, rest)
+          Catlist.singleton (Matched c :: log, rest)
       | Discrete (Argument _), _ ->
           Catlist.empty
       | Discrete (Command _), _ ->
@@ -205,6 +196,34 @@ module Pattern = struct
     let completely pattern argv =
       let results = prefix pattern argv [] in
       Catlist.find (fun (_log, argv) -> argv = []) results
+
+    let run pattern ~argv ~defaults =
+      match completely pattern argv with
+      | None -> Error `Match_not_found
+      | Some (log, _) ->
+          Ok (List.fold log ~nil:defaults ~cons:(fun entry map ->
+            match entry with
+            | Log.Captured (atom, value) ->
+                let f = function
+                  | Value.String "" -> Value.String value
+                  | String v -> failwithf "bug: value set twice: %S, %S" v value
+                  | Option None  -> Option (Some value)
+                  | Option (Some v)  -> failwithf "bug: option set twice: %S, %S" v value
+                  | List tail -> List (value :: tail)
+                  | _ -> failwithf "bug: captured toggle type for %S" value
+                in
+                Map.change atom map ~f
+            | Log.Matched atom ->
+                let f = function
+                  | Value.Unit -> Value.Unit
+                  | Bool _ -> Bool true
+                  | Int n -> Int (n + 1)
+                  | _ -> failwith ("bug: no default for key " ^ atom)
+                in
+                Map.change atom map ~f
+          ))
+      
+      
       
     module Test = struct      
       let x, y = Discrete (Argument "<x>"), Discrete (Argument "<y>") in
@@ -214,99 +233,33 @@ module Pattern = struct
       assert (perform (Sequence (x, y)) ["x"; "y"] [] = [["<y>"; "<x>"], []]);
       assert (perform (Junction (x, y)) ["a"] [] = [["<x>"], []; ["<y>"], []]);*)
       assert (completely (Sequence (Multiple x, y)) ["a"; "b"]
-              = Some ([MatchedArgument ("<y>", "b");
-                       MatchedArgument ("<x>", "a")], []));
+              = Some ([Captured ("<y>", "b");
+                       Captured ("<x>", "a")], []));
     end
   end
 end
 
-module Value = struct
-  type t = 
-    | Unit 
-    | Bool of bool 
-    | Int of int 
-    | String of string 
-    | Option of string option
-    | List of string list
-end
-
-module Occurence = struct
-  type plurality = (* String | Toggle *)
-    | Required     (* <a>    | c      *)
-    | Optional     (* [<a>]  | [c]    *)
-    | Multiple     (* <a>... | c...   *)
-
-  type capture =
-    | Toggle (* Flag, command, option without argument *)
-    | String (* Argument, option with argument *)
-
-  type t = plurality * capture
-
-  let _invariant = assert (Required < Optional && Optional < Multiple)
-
-  let to_string _ = "TODO"
-
-  let rec infer = function
-    | Pattern.Discrete (Argument a) ->
-        Map.singleton a (Required, String)
-    | Pattern.Discrete (Command c) ->
-        Map.singleton c (Required, Toggle)
-    | Pattern.Sequence (left, right) -> 
-        Map.union (fun _ (_, x) -> Multiple, x) (infer left) (infer right)
-    | Pattern.Junction (left, right) ->
-        let merger = function
-          | `Once (Required, x) -> Optional, x
-          | `Once t -> t
-          | `Both ((l, _), (r, x)) -> max l r, x in
-        Map.merge merger (infer left) (infer right)
-    | Pattern.Optional pattern ->
-        let mapper = function
-          | Required, x -> Optional, x
-          | other -> other in
-        Map.map mapper (infer pattern)
-    | Pattern.Multiple pattern ->
-        Map.map (fun (_, x) -> Multiple, x) (infer pattern)
-  
-  let default_value = function
-    | Required, String -> Value.String ""
-    | Optional, String -> Value.Option None
-    | Multiple, String -> Value.List []
-    | Required, Toggle -> Value.Unit
-    | Optional, Toggle -> Value.Bool false
-    | Multiple, Toggle -> Value.Int 0
-end
-
 module Defaults = struct
-  open Value
+  open Pattern open Value
+
+  let promote = function
+    | String _ | Option _ | List _ -> List []
+    | Unit | Bool _ | Int _ -> Int 0
+
+  let optionalize = function
+    | String _ -> Option None
+    | Unit -> Bool false
+    | other -> other
 
   let rec infer = function
-    | Pattern.Discrete (Argument a) ->
-        Map.singleton a Value.(String "")
-    | Pattern.Discrete (Command c) ->
-        Map.singleton c Value.Unit
-    | Pattern.Sequence (left, right) -> 
-        let unioner _ = function
-          | (String _ | Option _ | List _) -> List []
-          | (Unit | Bool _ | Int _) -> Int 0 in
-        Map.union unioner (infer left) (infer right)
-    | Pattern.Junction (left, right) ->
-        let merger = function
-          | `Once (String _) -> Option None
-          | `Once Unit -> Bool false
-          | `Once t -> t
-          | `Both (l, r) -> max l r in
-        Map.merge merger (infer left) (infer right)
-    | Pattern.Optional pattern ->
-        let mapper = function
-          | String _ -> Option None
-          | Unit -> Bool false
-          | other -> other in
-        Map.map mapper (infer pattern)
-    | Pattern.Multiple pattern ->
-        let mapper = function
-          | (String _ | Option _ | List _) -> List []
-          | (Unit | Bool _ | Int _) -> Int 0 in
-        Map.map mapper (infer pattern)
+    | Discrete (Argument a) -> Map.singleton a (String "")
+    | Discrete (Command c) -> Map.singleton c Unit
+    | Optional pattern -> Map.map optionalize (infer pattern)
+    | Multiple pattern -> Map.map promote (infer pattern)
+    | Sequence (left, right) -> 
+        Map.merge (infer left) (infer right) ~both:(fun _ -> promote)
+    | Junction (left, right) ->
+        Map.merge (infer left) (infer right) ~both:max ~one:optionalize
 end  
 
 
@@ -365,14 +318,14 @@ module Type = struct
       | Option t -> sprintf "(option %s)" (to_string t)
       | List t -> sprintf "(list %s)" (to_string t)
 
-    let is_compatible occurence dynamic_type =
-      match occurence, dynamic_type with
-      | Occurence.(Required, String), t
-      | Occurence.(Optional, String), Option t
-      | Occurence.(Multiple, String), List t when is_parsable t -> true
-      | Occurence.(Required, Toggle), Unit
-      | Occurence.(Optional, Toggle), Bool
-      | Occurence.(Multiple, Toggle), Int -> true
+    let is_compatible value dynamic_type =
+      match value, dynamic_type with
+      | Value.String _, t
+      | Value.Option _, Option t
+      | Value.List _, List t when is_parsable t -> true
+      | Value.Unit, Unit
+      | Value.Bool _, Bool
+      | Value.Int _, Int -> true
       | _ -> false
 
     module Set = Set.Make (struct type nonrec t = t let compare = compare end)
@@ -388,14 +341,6 @@ module Type = struct
 end
 
 module Set = Type.Dynamic.Set
-
-
-(** Match positional-only pattern against positional-only args *)
-(*let match_args ~env args =
-  | Pattern.Argument a ->
-      match args with
-      | head :: tail -> *)
-
 
 type _ t =
   | Term: 'a Type.t * string -> 'a t
@@ -415,37 +360,36 @@ let rec infer
       Map.singleton string set
   | Map (_callback, term) -> infer term
   | Both (first, second) -> 
-      Map.union Set.union (infer first) (infer second)
+      Map.merge ~both:Set.union (infer first) (infer second)
 
 
-let type_check type_env occurence_env =
-  let errors = Map.fold (fun atom set errors ->
+let type_check type_env defaults =
+  let errors = Map.fold (fun atom types errors ->
     Set.fold (fun dynamic_type errors ->
-       match Map.find_opt atom occurence_env with
+       match Map.find_opt atom defaults with
        | None ->
-           let error = atom, Type.Dynamic.to_string dynamic_type, Map.keys occurence_env in
+           let error = atom, Type.Dynamic.to_string dynamic_type, Map.keys defaults in
            `Atom_not_found error :: errors
-       | Some occurence ->
-           if Type.Dynamic.is_compatible occurence dynamic_type then
+       | Some default ->
+           if Type.Dynamic.is_compatible default dynamic_type then
              errors
            else
-             let error = atom, Type.Dynamic.to_string dynamic_type, Occurence.to_string occurence in
+             let error = atom, Type.Dynamic.to_string dynamic_type, default in
              `Type_error error :: errors
-    ) set errors
+    ) types errors
   ) type_env [] in
   if errors = [] then Ok () else Error errors
 
 let run
   : type a. argv:string list -> doc:Pattern.t -> a t -> (a, _) result
-  = fun ~argv:_argv ~doc term ->
+  = fun ~argv ~doc term ->
 
   let type_env = infer term in
-  let occurence_env = Occurence.infer doc in
-  let* () = type_check type_env occurence_env in
-  let _defaults = Map.map Occurence.default_value occurence_env in
-  failwith "not implemented"
-  (*let env = Pattern.Match.run doc defaults in
-  eval term ~env*)
+  let defaults = Defaults.infer doc in
+  let* () = type_check type_env defaults in
+  let _env = Pattern.Match.run doc ~argv ~defaults in
+  assert false
+  (*eval term ~env*)
   
 (*
   | Term (Type.String, a) -> begin
