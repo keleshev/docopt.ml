@@ -80,7 +80,6 @@ module Levenshtein = struct
     in
     let n = String.length a and m = String.length b in
     if n > m then aux ~bound a b else aux ~bound b a
-
 end
 
 module Map = struct
@@ -98,17 +97,16 @@ module Map = struct
   let keys t = fold (fun key _value list -> List.cons key list) t []
 
   (** Change value for key, fail if key not already present *)
-  let change key ~f map =
-    let f = function Some x -> Some (f x) | None -> failwithf "invalid key %S" key in
-    update key f map
+  let change_exn key ~f map =
+    map |> update key (function
+      | Some x -> Some (f x) 
+      | None -> failwithf "invalid key %S" key)
 end
 
 module List = struct
   include List
   let fold ~cons ~nil t = fold_right cons t nil
 end
-
-let hello = "world"
 
 let (let*) = Result.bind
 
@@ -199,7 +197,7 @@ module Pattern = struct
 
     let run pattern ~argv ~defaults =
       match completely pattern argv with
-      | None -> Error `Match_not_found
+      | None -> Error [`Match_not_found]
       | Some (log, _) ->
           Ok (List.fold log ~nil:defaults ~cons:(fun entry map ->
             match entry with
@@ -212,30 +210,16 @@ module Pattern = struct
                   | List tail -> List (value :: tail)
                   | _ -> failwithf "bug: captured toggle type for %S" value
                 in
-                Map.change atom map ~f
+                Map.change_exn atom map ~f
             | Log.Matched atom ->
                 let f = function
                   | Value.Unit -> Value.Unit
                   | Bool _ -> Bool true
                   | Int n -> Int (n + 1)
-                  | _ -> failwith ("bug: no default for key " ^ atom)
+                  | _ -> failwithf "bug: no default for key %S" atom
                 in
-                Map.change atom map ~f
+                Map.change_exn atom map ~f
           ))
-      
-      
-      
-    module Test = struct      
-      let x, y = Discrete (Argument "<x>"), Discrete (Argument "<y>") in
-      let _c, _d = Discrete (Command "c"), Discrete (Command "d") in
-      (*assert (perform x ["x"] [] = [["<x>"], []]);
-      assert (perform x ["x"] [] = [["<x>"], []]);
-      assert (perform (Sequence (x, y)) ["x"; "y"] [] = [["<y>"; "<x>"], []]);
-      assert (perform (Junction (x, y)) ["a"] [] = [["<x>"], []; ["<y>"], []]);*)
-      assert (completely (Sequence (Multiple x, y)) ["a"; "b"]
-              = Some ([Captured ("<y>", "b");
-                       Captured ("<x>", "a")], []));
-    end
   end
 end
 
@@ -275,6 +259,7 @@ module Type = struct
     | Out_channel
     | Int32
     | Int64
+    | Nativeint
     | Float
     | Char | UChar ?
     | Bytes ?
@@ -301,6 +286,14 @@ module Type = struct
       | Option of t
       | List of t
 
+    let rec to_string = function
+      | Unit -> "unit"
+      | Bool -> "bool"
+      | Int -> "int"
+      | String -> "string"
+      | Option t -> sprintf "(option %s)" (to_string t)
+      | List t -> sprintf "(list %s)" (to_string t)
+
     (** Do we support parsing a value of this type from an argv parameter? *)
     let is_parsable = function
       | Int     
@@ -309,14 +302,6 @@ module Type = struct
       | Bool    
       | Option _
       | List _ -> false
-
-    let rec to_string = function
-      | Unit -> "unit"
-      | Bool -> "bool"
-      | Int -> "int"
-      | String -> "string"
-      | Option t -> sprintf "(option %s)" (to_string t)
-      | List t -> sprintf "(list %s)" (to_string t)
 
     let is_compatible value dynamic_type =
       match value, dynamic_type with
@@ -343,25 +328,15 @@ end
 module Set = Type.Dynamic.Set
 
 type _ t =
-  | Term: 'a Type.t * string -> 'a t
+  | Get: 'a Type.t * string -> 'a t
   | Map: ('a -> 'b) * 'a t -> 'b t
   | Both: 'a t * 'b t -> ('a * 'b) t
 
-let term term_t atom = Term (term_t, atom)
-let map callback term = Map (callback, term)
-let both first second = Both (first, second)
-
 (** Infer an environment of all type annotations *)
-let rec infer
-  : type a. a t -> Type.Dynamic.Set.t Map.t
-  = function
-  | Term (t, string) -> 
-      let set = Set.singleton (Type.to_dynamic t) in
-      Map.singleton string set
+let rec infer: type a. a t -> Type.Dynamic.Set.t Map.t = function
+  | Get (t, atom) -> Map.singleton atom (Set.singleton (Type.to_dynamic t))
   | Map (_callback, term) -> infer term
-  | Both (first, second) -> 
-      Map.merge ~both:Set.union (infer first) (infer second)
-
+  | Both (left, right) -> Map.merge ~both:Set.union (infer left) (infer right)
 
 let type_check type_env defaults =
   let errors = Map.fold (fun atom types errors ->
@@ -380,42 +355,49 @@ let type_check type_env defaults =
   ) type_env [] in
   if errors = [] then Ok () else Error errors
 
-let run
-  : type a. argv:string list -> doc:Pattern.t -> a t -> (a, _) result
-  = fun ~argv ~doc term ->
+let find key map = 
+  match Map.find_opt key map with
+  | None -> failwithf "bug: missing key %S after type check" key
+  | Some value -> value
 
-  let type_env = infer term in
-  let defaults = Defaults.infer doc in
-  let* () = type_check type_env defaults in
-  let _env = Pattern.Match.run doc ~argv ~defaults in
-  assert false
-  (*eval term ~env*)
-  
-(*
-  | Term (Type.String, a) -> begin
-      match argv with
-      | head :: tail -> Ok (head, tail)
-      | [] -> Error (`Missing_positional_argument a)
-    end
+(* Cast value to type. Ignore type errors, those are eliminated in
+   [type_check]. Parse errors are still possible. *)
+let cast: type a. a Type.t -> Value.t -> a = fun t value ->
+  match t, value with
+  | Type.Unit, Value.Unit -> ()
+  | Type.Bool, Value.Bool bool -> bool
+  | Type.Int, Value.Int int -> int
+  | Type.Int, Value.String _ -> failwithf "TODO"
+  | Type.String, Value.String s -> s
+  | Type.(Option String), Value.Option o -> o
+  | Type.(Option _), Value.Option _ -> failwithf "TODO"
+  | Type.(List String), Value.List l -> List.rev l (* smarter way? *)
+  | Type.(List _), Value.List _ -> failwithf "TODO"
+  | _ -> failwithf "bug: this state should have been eliminated by type_check"
 
-  | Term (Type.Int, doc) ->
-      let term = Term (Type.String, doc) in
-      let* value, tail = eval ~argv (map Type.int_of_string term) in
-      let* value in
-      Ok (value, tail)
+let rec eval: type a. env:(Value.t Map.t) -> a t -> a = fun ~env -> function
+  | Get (t, atom) -> cast t (find atom env)
+  | Map (callback, term) -> callback (eval ~env term)
+  | Both (left, right) -> eval ~env left, eval ~env right
 
-  (*| Term (Type.Pair (left_t, right_t), Sequence (left, right)) ->
-      let* left_value, argv = eval ~argv (Term (left_t, left)) in
-      let* right_value, argv = eval ~argv (Term (right_t, right)) in
-      Ok ((left_value, right_value), argv)*)
+let run: type a. argv:string list -> doc:Pattern.t -> a t -> (a, _) result =
+  fun ~argv ~doc term ->
+    let type_env = infer term in
+    let defaults = Defaults.infer doc in
+    let* () = type_check type_env defaults in
+    let* env = Pattern.Match.run doc ~argv ~defaults in
+    Ok (eval term ~env)
 
-  | Map (callback, term) ->
-      let* value, tail = eval ~argv term in
-      Ok (callback value, tail)
+(* Exports *)
 
-  | Both (left, right) ->
-      let* left_value, argv = eval ~argv left in
-      let* right_value, argv = eval ~argv right in
-      Ok ((left_value, right_value), argv)
-
-  | _ -> failwith "not implemented"       *)
+let get term_t atom = Get (term_t, atom)
+let map callback term = Map (callback, term)
+let both first second = Both (first, second)
+let (let+) term callback = map callback term
+let (and+) = both
+let unit = Type.Unit
+let bool = Type.Bool
+let int = Type.Int
+let string = Type.String
+let option t = Type.Option t
+let list t = Type.List t
