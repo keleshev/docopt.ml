@@ -38,15 +38,11 @@ module Catlist = struct
 end
 
 module Levenshtein = struct
-  (** Edit distance to give spelling hints *)
-
-  (** Bounded Levenshtein distance
+  (** Edit distance to give spelling hints
+      https://www.baeldung.com/cs/levenshtein-distance-computation
   
-      As described in https://www.baeldung.com/cs/levenshtein-distance-computation
-  
-      let m = min(length(a), length(b))
-      Time: O(m * min(m, bound))
-      Space: O(m)
+      Time: O(min(a, b) * min(a, b, bound))
+      Space: O(min(a, b))
   *)
   let distance ?(bound=max_int) a b =
     let aux ~bound a b =
@@ -97,15 +93,10 @@ module Map = struct
   let keys t = fold (fun key _value list -> List.cons key list) t []
 
   (** Change value for key, fail if key not already present *)
-  let change_exn key ~f map =
+  let replace_exn key ~f map =
     map |> update key (function
       | Some x -> Some (f x) 
       | None -> failwithf "invalid key %S" key)
-end
-
-module List = struct
-  include List
-  let fold ~cons ~nil t = fold_right cons t nil
 end
 
 let (let*) = Result.bind
@@ -155,12 +146,6 @@ module Pattern = struct
       type t = entry list
     end
 
-    (* [<x>] <y>    y *)
-
-    (* (<x> <y> | <z>) <w>    x y z w  *)
-
-    (* <x>... <z>    x z w  *)
- 
     (* <x> [<y>] [<z>] <w> - Report ambiguous grammars? 
        How to report a matching error?
        [-xyz] vs [x y] meaning? 
@@ -199,27 +184,20 @@ module Pattern = struct
       match completely pattern argv with
       | None -> Error [`Match_not_found]
       | Some (log, _) ->
-          Ok (List.fold log ~nil:defaults ~cons:(fun entry map ->
-            match entry with
+          Ok (List.fold_left (fun map -> function
             | Log.Captured (atom, value) ->
-                let f = function
-                  | Value.String "" -> Value.String value
-                  | String v -> failwithf "bug: value set twice: %S, %S" v value
-                  | Option None  -> Option (Some value)
-                  | Option (Some v)  -> failwithf "bug: option set twice: %S, %S" v value
+                Map.replace_exn atom map ~f:Value.(function
+                  | String _ -> String value
+                  | Option _  -> Option (Some value)
                   | List tail -> List (value :: tail)
-                  | _ -> failwithf "bug: captured toggle type for %S" value
-                in
-                Map.change_exn atom map ~f
+                  | _ -> failwithf "bug: captured toggle type for %S" value)
             | Log.Matched atom ->
-                let f = function
-                  | Value.Unit -> Value.Unit
+                Map.replace_exn atom map ~f:Value.(function
+                  | Unit -> Unit
                   | Bool _ -> Bool true
                   | Int n -> Int (n + 1)
-                  | _ -> failwithf "bug: no default for key %S" atom
-                in
-                Map.change_exn atom map ~f
-          ))
+                  | _ -> failwithf "bug: matched captured type for %S" atom))
+            defaults log)
   end
 end
 
@@ -316,6 +294,22 @@ module Type = struct
     module Set = Set.Make (struct type nonrec t = t let compare = compare end)
   end
 
+  (* Cast value to type. Ignore type errors, those are eliminated in
+     [type_check]. Parse errors are still possible. *)
+  let cast: type a. a t -> Value.t -> a = fun t value ->
+    match t, value with
+    | Unit, Value.Unit -> ()
+    | Bool, Value.Bool bool -> bool
+    | Int, Value.Int int -> int
+    | Int, Value.String _ -> failwithf "TODO"
+    | String, Value.String s -> s
+    | (Option String), Value.Option o -> o
+    | (Option _), Value.Option _ -> failwithf "TODO"
+    | (List String), Value.List l -> l
+    | (List _), Value.List _ -> failwithf "TODO"
+    | _ -> failwithf "bug: this state should have been eliminated by type_check"
+  
+
   let rec to_dynamic: type a. a t -> Dynamic.t = function
     | Unit     -> Dynamic.Unit
     | Bool     -> Dynamic.Bool
@@ -327,23 +321,36 @@ end
 
 module Set = Type.Dynamic.Set
 
-type _ t =
-  | Get: 'a Type.t * string -> 'a t
-  | Map: ('a -> 'b) * 'a t -> 'b t
-  | Both: 'a t * 'b t -> ('a * 'b) t
+let find key map = 
+  match Map.find_opt key map with
+  | None -> failwithf "bug: missing key %S after type check" key
+  | Some value -> value
 
-(** Infer an environment of all type annotations *)
-let rec infer: type a. a t -> Type.Dynamic.Set.t Map.t = function
-  | Get (t, atom) -> Map.singleton atom (Set.singleton (Type.to_dynamic t))
-  | Map (_callback, term) -> infer term
-  | Both (left, right) -> Map.merge ~both:Set.union (infer left) (infer right)
+module Term = struct
+  type _ t =
+    | Get: 'a Type.t * string -> 'a t
+    | Map: ('a -> 'b) * 'a t -> 'b t
+    | Both: 'a t * 'b t -> ('a * 'b) t
+  
+  (** Infer environment of all type annotations *)
+  let rec infer: type a. a t -> Type.Dynamic.Set.t Map.t = function
+    | Get (t, atom) -> Map.singleton atom (Set.singleton (Type.to_dynamic t))
+    | Map (_callback, term) -> infer term
+    | Both (left, right) -> Map.merge ~both:Set.union (infer left) (infer right)
 
-let type_check type_env defaults =
+  (** Evaluate term by looking up values in the map *)
+  let rec eval: type a. env:(Value.t Map.t) -> a t -> a = fun ~env -> function
+    | Get (t, atom) -> Type.cast t (find atom env)
+    | Map (callback, term) -> callback (eval ~env term)
+    | Both (left, right) -> eval ~env left, eval ~env right
+end
+
+let type_check type_env value_env =
   let errors = Map.fold (fun atom types errors ->
     Set.fold (fun dynamic_type errors ->
-       match Map.find_opt atom defaults with
+       match Map.find_opt atom value_env with
        | None ->
-           let error = atom, Type.Dynamic.to_string dynamic_type, Map.keys defaults in
+           let error = atom, Type.Dynamic.to_string dynamic_type, Map.keys value_env in
            `Atom_not_found error :: errors
        | Some default ->
            if Type.Dynamic.is_compatible default dynamic_type then
@@ -355,44 +362,19 @@ let type_check type_env defaults =
   ) type_env [] in
   if errors = [] then Ok () else Error errors
 
-let find key map = 
-  match Map.find_opt key map with
-  | None -> failwithf "bug: missing key %S after type check" key
-  | Some value -> value
-
-(* Cast value to type. Ignore type errors, those are eliminated in
-   [type_check]. Parse errors are still possible. *)
-let cast: type a. a Type.t -> Value.t -> a = fun t value ->
-  match t, value with
-  | Type.Unit, Value.Unit -> ()
-  | Type.Bool, Value.Bool bool -> bool
-  | Type.Int, Value.Int int -> int
-  | Type.Int, Value.String _ -> failwithf "TODO"
-  | Type.String, Value.String s -> s
-  | Type.(Option String), Value.Option o -> o
-  | Type.(Option _), Value.Option _ -> failwithf "TODO"
-  | Type.(List String), Value.List l -> List.rev l (* smarter way? *)
-  | Type.(List _), Value.List _ -> failwithf "TODO"
-  | _ -> failwithf "bug: this state should have been eliminated by type_check"
-
-let rec eval: type a. env:(Value.t Map.t) -> a t -> a = fun ~env -> function
-  | Get (t, atom) -> cast t (find atom env)
-  | Map (callback, term) -> callback (eval ~env term)
-  | Both (left, right) -> eval ~env left, eval ~env right
-
-let run: type a. argv:string list -> doc:Pattern.t -> a t -> (a, _) result =
+let run: type a. argv:string list -> doc:Pattern.t -> a Term.t -> (a, _) result =
   fun ~argv ~doc term ->
-    let type_env = infer term in
+    let type_env = Term.infer term in
     let defaults = Defaults.infer doc in
     let* () = type_check type_env defaults in
     let* env = Pattern.Match.run doc ~argv ~defaults in
-    Ok (eval term ~env)
+    Ok (Term.eval term ~env)
 
 (* Exports *)
 
-let get term_t atom = Get (term_t, atom)
-let map callback term = Map (callback, term)
-let both first second = Both (first, second)
+let get type_annotation atom = Term.Get (type_annotation, atom)
+let map callback term = Term.Map (callback, term)
+let both first second = Term.Both (first, second)
 let (let+) term callback = map callback term
 let (and+) = both
 let unit = Type.Unit
