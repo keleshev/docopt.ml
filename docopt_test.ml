@@ -1,22 +1,45 @@
 let (=>) left right = print_char (if left = right then '.' else 'F')
 
 open Docopt.Pattern
-let c = Discrete (Command "c")
-let a = Discrete (Argument "<a>")
-let b = Discrete (Argument "<b>")
 let (<*>) l r = Sequence (l, r)
+let (!) source = Discrete (Docopt.Atom.parse source)
 
-module Test_integration = struct
-  let doc = c <*> Multiple a <*> b (* c <a>... <b> *)
+module Test_unit_bool_int = struct
+  let _doc = "usage: prog unit [bool] int..."
+  let doc = !"unit" <*> Optional !"bool" <*> Multiple !"int"
 
   let main =
     let open Docopt in
-    let+ () = get unit "c"
-    and+ a = get (list string) "<a>"
-    and+ b = get string "<b>" in
-    a, b
+    let+ () = get unit "unit"
+    and+ bool = get bool "bool"
+    and+ int = get int "int" in
+    bool, int
 
   let () =
-    Docopt.run main ~doc ~argv:["c"; "a"; "b"; "c"]
-      => Ok (["a"; "b"], "c");
+    Docopt.run main ~doc ~argv:["unit"; "bool"; "int"; "int"]
+      => Ok (true, 2) 
+
+  let () =
+    Docopt.run main ~doc ~argv:["unit"; "int"]
+      => Ok (false, 1)
+end
+
+module Test_string_option_list = struct
+  let _doc = "usage: prog <string> [<option>] <list>..."
+  let doc = !"<string>" <*> Optional !"<option>" <*> Multiple !"<list>"
+
+  let main =
+    let open Docopt in
+    let+ s = get string "<string>"
+    and+ o = get (option string) "<option>"
+    and+ l = get (list string) "<list>" in
+    s, o, l
+
+  let () =
+    Docopt.run main ~doc ~argv:["a"; "b"; "c"; "d"]
+      => Ok ("a", Some "b", ["c"; "d"]) 
+
+  let () =
+    Docopt.run main ~doc ~argv:["a"; "b"]
+      => Ok ("a", None, ["b"]) 
 end

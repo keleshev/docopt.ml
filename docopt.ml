@@ -2,7 +2,7 @@ let sprintf = Printf.sprintf
 
 let failwithf x = Printf.ksprintf failwith x
 
-module Catlist = struct
+module Chain = struct
   (* List with O(1) concatenation, but O(length) head *)
  
   type 'a t = Empty | Singleton of 'a | Concat of 'a t * 'a t
@@ -16,9 +16,10 @@ module Catlist = struct
     | Empty, x | x, Empty -> x
     | x, y -> Concat (x, y)
 
-  let cons item = function
+  let append t item =
+    match t with
     | Empty -> Singleton item
-    | other -> Concat (Singleton item, other)
+    | other -> Concat (other, Singleton item)
 
   let rec concat_map f = function
     | Singleton s -> f s
@@ -153,32 +154,29 @@ module Pattern = struct
 
     let rec prefix pattern argv log =
       let open Atom in let open Log in
-      let (let*) = Catlist.bind in
+      let (let*) = Chain.bind in
       match pattern, argv with
       | Discrete (Argument a), value :: rest -> 
-          Catlist.singleton (Captured (a, value) :: log, rest)
+          (*Printf.printf "%d: %S => %S\n" (List.length argv) a value;*)
+          Chain.singleton (Captured (a, value) :: log, rest)
       | Discrete (Command c), value :: rest when c = value ->
-          Catlist.singleton (Matched c :: log, rest)
-      | Discrete (Argument _), _ ->
-          Catlist.empty
-      | Discrete (Command _), _ ->
-          Catlist.empty
+          Chain.singleton (Matched c :: log, rest)
+      | Discrete (Argument _ | Command _), _ ->
+          Chain.empty
       | Sequence (left, right), argv ->
           let* log, argv = prefix left argv log in
           prefix right argv log
       | Junction (left, right), argv ->
-          let left = prefix left argv log
-          and right = prefix right argv log in
-          Catlist.concat left right
+          Chain.concat (prefix left argv log) (prefix right argv log)
       | Optional pattern, argv ->
-          Catlist.cons ([], argv) (prefix pattern argv log)
+          Chain.append (prefix pattern argv log) (log, argv)
       | Multiple inner, argv ->
           let* log, argv = prefix inner argv log in
-          Catlist.cons (log, argv) (prefix pattern argv log)
+          Chain.append (prefix pattern argv log) (log, argv)
 
     let completely pattern argv =
       let results = prefix pattern argv [] in
-      Catlist.find (fun (_log, argv) -> argv = []) results
+      Chain.find (fun (_log, argv) -> argv = []) results
 
     let run pattern ~argv ~defaults =
       match completely pattern argv with
@@ -186,6 +184,7 @@ module Pattern = struct
       | Some (log, _) ->
           Ok (List.fold_left (fun map -> function
             | Log.Captured (atom, value) ->
+                (*Printf.printf "Captured (%S, %S)\n" atom value;*)
                 Map.replace_exn atom map ~f:Value.(function
                   | String _ -> String value
                   | Option _  -> Option (Some value)
@@ -309,7 +308,6 @@ module Type = struct
     | (List _), Value.List _ -> failwithf "TODO"
     | _ -> failwithf "bug: this state should have been eliminated by type_check"
   
-
   let rec to_dynamic: type a. a t -> Dynamic.t = function
     | Unit     -> Dynamic.Unit
     | Bool     -> Dynamic.Bool
