@@ -43,3 +43,21 @@ module Test_string_option_list = struct
     Docopt.run main ~doc ~argv:["a"; "b"]
       => Ok ("a", None, ["b"]) 
 end
+
+(*module Test_russ_cox_pathological_example = struct
+  let _doc = "usage: prog [a] [a] [a] a a a"
+  let a4 = !"a" <*> !"a" <*> !"a" <*> !"a"
+  let aq4 = Optional !"a" <*> Optional  !"a" <*>Optional  !"a" <*>Optional  !"a"
+  let aq16 = aq4 <*> aq4 <*> aq4 <*> aq4
+  let a16 = a4 <*> a4 <*> a4 <*> a4
+  let doc = aq16 <*> aq16 <*> a16 <*> a16
+
+  let main = Docopt.(get int "a")
+
+  let _ =
+    let a16 = ["a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"] in
+    Docopt.run main ~doc ~argv:(a16 @ a16)
+      => Ok 32
+end*)
+
+
