@@ -44,10 +44,23 @@ module Test_string_option_list = struct
       => Ok ("a", None, ["b"]) 
 end
 
-(*module Test_russ_cox_pathological_example = struct
+module Test_russ_cox_pathological_example = struct
+  let _doc = "usage: prog [a] [a] [a] [a] a a a a"
+  let doc = Optional !"a" <*> Optional !"a" 
+        <*> Optional !"a" <*> Optional !"a" 
+        <*> !"a" <*> !"a" <*> !"a" <*> !"a"
+
+  let main = Docopt.(get int "a")
+
+  let _ =
+    Docopt.run main ~doc ~argv:["a";"a";"a"; "a"]
+      => Ok 4
+end
+
+module Test_russ_cox_pathological_example' = struct
   let _doc = "usage: prog [a] [a] [a] a a a"
-  let a4 = !"a" <*> !"a" <*> !"a" <*> !"a"
   let aq4 = Optional !"a" <*> Optional  !"a" <*>Optional  !"a" <*>Optional  !"a"
+  let a4 = !"a" <*> !"a" <*> !"a" <*> !"a"
   let aq16 = aq4 <*> aq4 <*> aq4 <*> aq4
   let a16 = a4 <*> a4 <*> a4 <*> a4
   let doc = aq16 <*> aq16 <*> a16 <*> a16
@@ -58,6 +71,7 @@ end
     let a16 = ["a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"] in
     Docopt.run main ~doc ~argv:(a16 @ a16)
       => Ok 32
-end*)
+end
 
+(* TODO: (a*)* *)
 

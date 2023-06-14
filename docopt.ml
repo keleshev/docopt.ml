@@ -10,6 +10,8 @@ module Chain = struct
 
   let empty = Empty
   let singleton x = Singleton x
+  let pair x y = Concat (Singleton x, Singleton y)
+  let triple x y z = Concat (Singleton x, Concat (Singleton y, Singleton z))
 
   let concat a b =
     match a, b with
@@ -173,14 +175,66 @@ module Pattern = struct
           let* log, argv = prefix inner argv log in
           Chain.append (prefix pattern argv log) (log, argv)
 
-    let completely pattern argv =
+    let completely' pattern argv =
       let results = prefix pattern argv [] in
       Chain.find (fun (_log, argv) -> argv = []) results
 
+    let rec step pattern value log =
+      let open Atom in let open Log in
+      let (let*) = Chain.bind in
+      match pattern, value with
+      | Discrete (Argument a), Some value ->
+          Chain.singleton (Some (Captured (a, value) :: log), None)
+      | Discrete (Argument _), None ->
+          Chain.empty
+      | Discrete (Command c), Some value when c = value ->
+          (*Printf.printf "%S\n" c;*)
+          Chain.singleton (Some (Matched c :: log), None)
+      | Discrete (Command _), _ ->
+          Chain.empty
+      | Sequence (left, right), value ->
+          let* log', pat = step left value log in
+          let p = match pat with
+            | None -> right
+            | Some pat -> Sequence (pat, right) in
+          Chain.singleton (log', Some p)
+      | Junction (left, right), value ->
+          Chain.concat (step left value log) (step right value log)
+      | Optional _, None ->
+          Chain.singleton (None, None)
+      | Optional pattern, value ->
+          Chain.append (step pattern value log) (None, None)
+      | Multiple inner, value ->
+          let* log', pattern' = step inner value log in
+          match log', pattern' with
+          | None, None -> Chain.singleton (None, None) 
+          | None, Some p -> step p value log
+          | Some l, None -> Chain.pair (Some l, Some pattern) (Some l, None)
+          | Some l, Some p -> 
+              Chain.pair
+                (Some l, Some (Sequence (p, pattern)))
+                (Some l, Some p)
+
+    let rec walk pattern log =
+      let (let*) = Chain.bind in function
+      | [] -> step pattern None log
+      | head :: tail ->
+          let* log', pattern' = step pattern (Some head) log in
+          match log', pattern' with
+          | None, None -> Chain.empty
+          | None, Some p -> walk p log (head :: tail)
+          | Some l, None when tail = [] -> Chain.singleton (Some l, None)
+          | Some _, None -> Chain.empty
+          | Some l, Some p -> walk p l tail
+
+    let completely pattern argv =
+      let results = walk pattern [] argv in
+      Chain.find (function (Some _, None) -> true | _ -> false) results
+      
+
     let run pattern ~argv ~defaults =
       match completely pattern argv with
-      | None -> Error [`Match_not_found]
-      | Some (log, _) ->
+      | Some (Some log, _) ->
           Ok (List.fold_left (fun map -> function
             | Log.Captured (atom, value) ->
                 (*Printf.printf "Captured (%S, %S)\n" atom value;*)
@@ -190,12 +244,14 @@ module Pattern = struct
                   | List tail -> List (value :: tail)
                   | _ -> failwithf "bug: captured toggle type for %S" value)
             | Log.Matched atom ->
+                (*Printf.printf "Matched %S\n" atom;*)
                 Map.replace_exn atom map ~f:Value.(function
                   | Unit -> Unit
                   | Bool _ -> Bool true
                   | Int n -> Int (n + 1)
                   | _ -> failwithf "bug: matched captured type for %S" atom))
             defaults log)
+      | _ -> Printf.printf " e"; Error [`Match_not_found]
   end
 end
 
