@@ -135,6 +135,51 @@ module Pattern = struct
     | Optional of t      (* [<x>]     *)
     | Multiple of t      (* <x>...    *)
 
+  module NFA = struct
+    type t = {id: int; transitions: transition list}
+    and transition = {condition: Atom.t; state: t}
+
+    let create =
+      let counter = ref 0 in
+      fun transitions -> incr counter; {id=!counter; transitions}
+
+    let final = create []
+
+    let id = function
+      | {transitions=[]; id=_} -> 1  (* Final state has always id 1 *)
+      | {id; _} -> id
+
+    type t =
+      | Match
+      | Transition of (Atom.t * t)
+      | Fork of (t * t)
+      | Lazy of t Lazy.t
+      | Reference of t ref
+
+    module Set = struct 
+      module H = Hashtbl.Make (struct
+        type nonrec t = t
+        let equal = (==)
+        let hash = Hashtbl.hash
+      end)
+
+      type t = unit H.t
+      
+      let create () = H.create 64
+      let add t key = H.add t key ()
+      let mem = H.mem
+    end
+  end
+  open NFA
+
+  let rec to_nfa ?(next=Match) = function
+    | Discrete atom -> Transition (atom, next)
+    | Sequence (first, second) -> to_nfa first ~next:(to_nfa second ~next)
+    | Junction (left, right) -> Fork (to_nfa left ~next, to_nfa right ~next)
+    | Optional t -> Fork (to_nfa t ~next, next)
+    | Multiple t -> 
+        let rec s = Lazy (lazy (to_nfa t ~next:(Fork (s, next)))) in s
+
   module Match = struct
     module Log = struct
       (** Instead of adding matches to a Map in O(log(n)) in many branches that

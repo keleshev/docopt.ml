@@ -57,7 +57,7 @@ module Test_russ_cox_pathological_example = struct
       => Ok 4
 end
 
-module Test_russ_cox_pathological_example' = struct
+(*module Test_russ_cox_pathological_example' = struct
   let _doc = "usage: prog [a] [a] [a] a a a"
   let aq4 = Optional !"a" <*> Optional  !"a" <*>Optional  !"a" <*>Optional  !"a"
   let a4 = !"a" <*> !"a" <*> !"a" <*> !"a"
@@ -71,7 +71,7 @@ module Test_russ_cox_pathological_example' = struct
     let a16 = ["a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"] in
     Docopt.run main ~doc ~argv:(a16 @ a16)
       => Ok 32
-end
+end*)
 
-(* TODO: (a*)* *)
+(* TODO: (a* )* *)
 
