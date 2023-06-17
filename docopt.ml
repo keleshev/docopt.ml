@@ -135,32 +135,48 @@ module Pattern = struct
     | Optional of t      (* [<x>]     *)
     | Multiple of t      (* <x>...    *)
 
+  module Match = struct
+    type t =
+      | Captured of string * string
+      | Matched of string
+
+    module Log = struct
+      (** Instead of adding matches to a Map in O(log(n)) in many branches that
+          might be discarded, add succesfull matches to a log in O(1), then
+          build the Map once. *)
+
+      type nonrec t = t list
+    end
+  end
+
+
   module NFA = struct
-    type t = {id: int; transitions: transition list}
-    and transition = {condition: Atom.t; state: t}
+    type state = {id: int; transitions: transition array}
+      (* {id; transitions=[|Consume (a, s)|]} is (id)--a-->(s) *)
+
+    and transition =
+      | Consume of Atom.t * state  (* Consume (a, s) is •-a->(s) *)
+      | Epsilon of state           (* Epsilon s    is •-ε->(s) *)
+
+    type t = state
+
+    let invariant = function
+      | {id=0; transitions=[||]} -> true (* final state *)
+      | {id=_; transitions=[||]} | {id=0; transitions=_} -> false
+      | _ -> true
 
     let create =
       let counter = ref 0 in
-      fun transitions -> incr counter; {id=!counter; transitions}
+      fun transitions -> (incr counter; {id= !counter; transitions})
 
-    let final = create []
-
-    let id = function
-      | {transitions=[]; id=_} -> 1  (* Final state has always id 1 *)
-      | {id; _} -> id
-
-    type t =
-      | Match
-      | Transition of (Atom.t * t)
-      | Fork of (t * t)
-      | Lazy of t Lazy.t
-      | Reference of t ref
+    let final = {id=0; transitions=[||]}
+    let is_final {id; _} = (id = 0)
 
     module Set = struct 
       module H = Hashtbl.Make (struct
         type nonrec t = t
-        let equal = (==)
-        let hash = Hashtbl.hash
+        let equal {id=a; _} {id=b; _} = (a = b)
+        let hash {id; _} = Hashtbl.hash id
       end)
 
       type t = unit H.t
@@ -169,135 +185,97 @@ module Pattern = struct
       let add t key = H.add t key ()
       let mem = H.mem
     end
+
+    let rec eval_transition transition log input visited =
+      match transition, input with
+      | Epsilon state, _ ->
+          eval_state state log input visited
+      | Consume (Argument a, state), Some arg ->
+          Printf.printf "%d: %S => %S \n" state.id a arg;
+          Chain.singleton (state, Match.Captured (a, arg) :: log) 
+      | Consume (Command c, state), Some arg when c = arg ->
+          Printf.printf "%d: %S\n" state.id c;
+          Chain.singleton (state, Match.Matched c :: log)
+      | Consume (Argument _, _), None
+      | Consume (Command _, _), _ ->
+          Chain.empty
+
+    and eval_state ({transitions; _} as state) log input visited =
+      if Set.mem visited state then Chain.empty else begin
+        Set.add visited state;
+        if is_final state && input = None then
+          Chain.singleton (final, log)
+        else
+          let folder chain transition =
+            (* TODO why switched order? *)
+            Chain.concat (eval_transition transition log input visited) chain
+          in
+          Array.fold_left folder Chain.empty transitions
+      end
+
+    let eval_chain chain input =
+      let visited = Set.create () in
+      chain |> Chain.concat_map (fun (state, log) ->
+        eval_state state log input visited)
+
+    let rec run chain = function
+      | [] -> 
+          let chain = eval_chain chain None in
+          Chain.find (fun (state, _log) -> is_final state) chain
+      | head :: tail ->
+          let chain = eval_chain chain (Some head) in
+          run chain tail
   end
   open NFA
 
-  let rec to_nfa ?(next=Match) = function
-    | Discrete atom -> Transition (atom, next)
+  let rec to_nfa ?(next=NFA.final) = function
+    | Discrete atom -> NFA.create [|Consume (atom, next)|]
     | Sequence (first, second) -> to_nfa first ~next:(to_nfa second ~next)
-    | Junction (left, right) -> Fork (to_nfa left ~next, to_nfa right ~next)
-    | Optional t -> Fork (to_nfa t ~next, next)
+    | Junction (left, right) ->
+        NFA.create [|
+          Epsilon (to_nfa left ~next); 
+          Epsilon (to_nfa right ~next);
+        |]
+    | Optional t ->
+        NFA.create [|
+          Epsilon (to_nfa t ~next); 
+          Epsilon next;
+        |]
     | Multiple t -> 
-        let rec s = Lazy (lazy (to_nfa t ~next:(Fork (s, next)))) in s
+       let transitions = [|
+          Epsilon NFA.final; (* mutated below *)
+          Epsilon next;
+       |] in
+       let state = to_nfa t ~next:(create transitions) in
+       transitions.(0) <- Epsilon state;
+       state
 
-  module Match = struct
-    module Log = struct
-      (** Instead of adding matches to a Map in O(log(n)) in many branches that
-          might be discarded, add succesfull matches to a log in O(1), then
-          build the Map once. *)
+  (* <x> [<y>] [<z>] <w> - Report ambiguous grammars? 
+     How to report a matching error?
+     [-xyz] vs [x y] meaning? 
+     Matching performance? *)
 
-      type entry =
-        | Captured of string * string
-        | Matched of string
-
-      type t = entry list
-    end
-
-    (* <x> [<y>] [<z>] <w> - Report ambiguous grammars? 
-       How to report a matching error?
-       [-xyz] vs [x y] meaning? 
-       Matching performance? *)
-
-    let rec prefix pattern argv log =
-      let open Atom in let open Log in
-      let (let*) = Chain.bind in
-      match pattern, argv with
-      | Discrete (Argument a), value :: rest -> 
-          (*Printf.printf "%d: %S => %S\n" (List.length argv) a value;*)
-          Chain.singleton (Captured (a, value) :: log, rest)
-      | Discrete (Command c), value :: rest when c = value ->
-          Chain.singleton (Matched c :: log, rest)
-      | Discrete (Argument _ | Command _), _ ->
-          Chain.empty
-      | Sequence (left, right), argv ->
-          let* log, argv = prefix left argv log in
-          prefix right argv log
-      | Junction (left, right), argv ->
-          Chain.concat (prefix left argv log) (prefix right argv log)
-      | Optional pattern, argv ->
-          Chain.append (prefix pattern argv log) (log, argv)
-      | Multiple inner, argv ->
-          let* log, argv = prefix inner argv log in
-          Chain.append (prefix pattern argv log) (log, argv)
-
-    let completely' pattern argv =
-      let results = prefix pattern argv [] in
-      Chain.find (fun (_log, argv) -> argv = []) results
-
-    let rec step pattern value log =
-      let open Atom in let open Log in
-      let (let*) = Chain.bind in
-      match pattern, value with
-      | Discrete (Argument a), Some value ->
-          Chain.singleton (Some (Captured (a, value) :: log), None)
-      | Discrete (Argument _), None ->
-          Chain.empty
-      | Discrete (Command c), Some value when c = value ->
-          (*Printf.printf "%S\n" c;*)
-          Chain.singleton (Some (Matched c :: log), None)
-      | Discrete (Command _), _ ->
-          Chain.empty
-      | Sequence (left, right), value ->
-          let* log', pat = step left value log in
-          let p = match pat with
-            | None -> right
-            | Some pat -> Sequence (pat, right) in
-          Chain.singleton (log', Some p)
-      | Junction (left, right), value ->
-          Chain.concat (step left value log) (step right value log)
-      | Optional _, None ->
-          Chain.singleton (None, None)
-      | Optional pattern, value ->
-          Chain.append (step pattern value log) (None, None)
-      | Multiple inner, value ->
-          let* log', pattern' = step inner value log in
-          match log', pattern' with
-          | None, None -> Chain.singleton (None, None) 
-          | None, Some p -> step p value log
-          | Some l, None -> Chain.pair (Some l, Some pattern) (Some l, None)
-          | Some l, Some p -> 
-              Chain.pair
-                (Some l, Some (Sequence (p, pattern)))
-                (Some l, Some p)
-
-    let rec walk pattern log =
-      let (let*) = Chain.bind in function
-      | [] -> step pattern None log
-      | head :: tail ->
-          let* log', pattern' = step pattern (Some head) log in
-          match log', pattern' with
-          | None, None -> Chain.empty
-          | None, Some p -> walk p log (head :: tail)
-          | Some l, None when tail = [] -> Chain.singleton (Some l, None)
-          | Some _, None -> Chain.empty
-          | Some l, Some p -> walk p l tail
-
-    let completely pattern argv =
-      let results = walk pattern [] argv in
-      Chain.find (function (Some _, None) -> true | _ -> false) results
-      
-
-    let run pattern ~argv ~defaults =
-      match completely pattern argv with
-      | Some (Some log, _) ->
-          Ok (List.fold_left (fun map -> function
-            | Log.Captured (atom, value) ->
-                (*Printf.printf "Captured (%S, %S)\n" atom value;*)
-                Map.replace_exn atom map ~f:Value.(function
-                  | String _ -> String value
-                  | Option _  -> Option (Some value)
-                  | List tail -> List (value :: tail)
-                  | _ -> failwithf "bug: captured toggle type for %S" value)
-            | Log.Matched atom ->
-                (*Printf.printf "Matched %S\n" atom;*)
-                Map.replace_exn atom map ~f:Value.(function
-                  | Unit -> Unit
-                  | Bool _ -> Bool true
-                  | Int n -> Int (n + 1)
-                  | _ -> failwithf "bug: matched captured type for %S" atom))
-            defaults log)
-      | _ -> Printf.printf " e"; Error [`Match_not_found]
-  end
+  let run pattern ~argv ~defaults =
+    let nfa = to_nfa pattern in
+    match NFA.run (Chain.singleton (nfa, [])) argv with
+    | Some (_, log) ->
+        Ok (List.fold_left (fun map -> function
+          | Match.Captured (atom, value) ->
+              Printf.printf "Captured (%S, %S)\n" atom value;
+              Map.replace_exn atom map ~f:Value.(function
+                | String _ -> String value
+                | Option _  -> Option (Some value)
+                | List tail -> List (value :: tail)
+                | _ -> failwithf "bug: captured toggle type for %S" value)
+          | Match.Matched atom ->
+              (*Printf.printf "Matched %S\n" atom;*)
+              Map.replace_exn atom map ~f:Value.(function
+                | Unit -> Unit
+                | Bool _ -> Bool true
+                | Int n -> Int (n + 1)
+                | _ -> failwithf "bug: matched captured type for %S" atom))
+          defaults log)
+    | _ -> Printf.printf " e"; Error [`Match_not_found]
 end
 
 module Defaults = struct
@@ -465,7 +443,7 @@ let run: type a. argv:string list -> doc:Pattern.t -> a Term.t -> (a, _) result 
     let type_env = Term.infer term in
     let defaults = Defaults.infer doc in
     let* () = type_check type_env defaults in
-    let* env = Pattern.Match.run doc ~argv ~defaults in
+    let* env = Pattern.run doc ~argv ~defaults in
     Ok (Term.eval term ~env)
 
 (* Exports *)
