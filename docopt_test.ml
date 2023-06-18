@@ -52,13 +52,13 @@ module Test_russ_cox_pathological_example = struct
 
   let main = Docopt.(get int "a")
 
-  let _ =
+  let () =
     Docopt.run main ~doc ~argv:["a";"a";"a"; "a"]
       => Ok 4
 end
 
-module Test_russ_cox_pathological_example' = struct
-  let _doc = "usage: prog [a] [a] [a] a a a"
+module Test_russ_cox_pathological_example_large = struct
+  let _doc = "usage: prog [a]*32  a*32"
   let aq4 = Optional !"a" <*> Optional  !"a" <*>Optional  !"a" <*>Optional  !"a"
   let a4 = !"a" <*> !"a" <*> !"a" <*> !"a"
   let aq16 = aq4 <*> aq4 <*> aq4 <*> aq4
@@ -67,11 +67,21 @@ module Test_russ_cox_pathological_example' = struct
 
   let main = Docopt.(get int "a")
 
-  let _ =
-    let a16 = ["a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"] in
-    Docopt.run main ~doc ~argv:(a16 @ a16)
+  let () =
+    let a8 = ["a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"] in
+    Docopt.run main ~doc ~argv:(a8 @ a8 @ a8 @ a8)
       => Ok 32
 end
 
-(* TODO: (a* )* *)
+module Test_another_pathological_example = struct
+  let _doc = "usage: prog [[a]...]..."
+  let doc = Multiple (Optional (Multiple (Optional !"a")))
+
+  let main = Docopt.(get int "a")
+
+  let () =
+    let a8 = ["a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"] in
+    Docopt.run main ~doc ~argv:(a8 @ a8)
+      => Ok 16
+end
 
