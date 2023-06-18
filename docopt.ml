@@ -1,6 +1,9 @@
 let sprintf = Printf.sprintf
 
 let failwithf x = Printf.ksprintf failwith x
+let debug = false
+let printfn x = Printf.ksprintf (if debug then print_endline else (fun _ -> ())) x
+let (let*) = Result.bind
 
 module Chain = struct
   (* List with O(1) concatenation, but O(length) head *)
@@ -10,30 +13,20 @@ module Chain = struct
 
   let empty = Empty
   let singleton x = Singleton x
-  let pair x y = Concat (Singleton x, Singleton y)
-  let triple x y z = Concat (Singleton x, Concat (Singleton y, Singleton z))
 
   let concat a b =
     match a, b with
     | Empty, x | x, Empty -> x
     | x, y -> Concat (x, y)
 
-  let append t item =
-    match t with
-    | Empty -> Singleton item
-    | other -> Concat (other, Singleton item)
-
   let rec concat_map f = function
     | Singleton s -> f s
     | Concat (x, y) -> concat (concat_map f x) (concat_map f y)
     | other -> other
 
-  let bind t f = concat_map f t
-
   let rec find predicate = function
-    | Empty -> None
     | Singleton s when predicate s -> Some s
-    | Singleton _ -> None
+    | Empty | Singleton _ -> None
     | Concat (left, right) ->
         match find predicate left with
         | Some _ as result -> result
@@ -102,8 +95,6 @@ module Map = struct
       | None -> failwithf "invalid key %S" key)
 end
 
-let (let*) = Result.bind
-
 module Atom = struct
   type option =
     | Long of string
@@ -127,6 +118,12 @@ module Value = struct
     | List of string list
 end
 
+module Match = struct
+  type t =
+    | Captured of string * string
+    | Matched of string
+end
+
 module Pattern = struct
   type t =
     | Discrete of Atom.t (* <x>       *)
@@ -134,20 +131,6 @@ module Pattern = struct
     | Junction of t * t  (* <x> | <y> *)
     | Optional of t      (* [<x>]     *)
     | Multiple of t      (* <x>...    *)
-
-  module Match = struct
-    type t =
-      | Captured of string * string
-      | Matched of string
-
-    module Log = struct
-      (** Instead of adding matches to a Map in O(log(n)) in many branches that
-          might be discarded, add succesfull matches to a log in O(1), then
-          build the Map once. *)
-
-      type nonrec t = t list
-    end
-  end
 
 
   module NFA = struct
@@ -191,10 +174,10 @@ module Pattern = struct
       | Epsilon state, _ ->
           eval_state state log input visited
       | Consume (Argument a, state), Some arg ->
-          Printf.printf "%d: %S => %S \n" state.id a arg;
+          printfn "%d: %S => %S" state.id a arg;
           Chain.singleton (state, Match.Captured (a, arg) :: log) 
       | Consume (Command c, state), Some arg when c = arg ->
-          Printf.printf "%d: %S\n" state.id c;
+          printfn "%d: %S" state.id c;
           Chain.singleton (state, Match.Matched c :: log)
       | Consume (Argument _, _), None
       | Consume (Command _, _), _ ->
@@ -204,13 +187,13 @@ module Pattern = struct
       if Set.mem visited state then Chain.empty else begin
         Set.add visited state;
         if is_final state && input = None then
-          Chain.singleton (final, log)
+          Chain.singleton (state, log)
         else
-          let folder chain transition =
-            (* TODO why switched order? *)
-            Chain.concat (eval_transition transition log input visited) chain
+          let folder transition chain =
+            (* Concat in revers order -- why? *)
+            Chain.concat chain (eval_transition transition log input visited)
           in
-          Array.fold_left folder Chain.empty transitions
+          Array.fold_right folder transitions Chain.empty
       end
 
     let eval_chain chain input =
@@ -261,21 +244,21 @@ module Pattern = struct
     | Some (_, log) ->
         Ok (List.fold_left (fun map -> function
           | Match.Captured (atom, value) ->
-              Printf.printf "Captured (%S, %S)\n" atom value;
+              printfn "Captured (%S, %S)" atom value;
               Map.replace_exn atom map ~f:Value.(function
                 | String _ -> String value
                 | Option _  -> Option (Some value)
                 | List tail -> List (value :: tail)
                 | _ -> failwithf "bug: captured toggle type for %S" value)
           | Match.Matched atom ->
-              (*Printf.printf "Matched %S\n" atom;*)
+              printfn "Matched %S" atom;
               Map.replace_exn atom map ~f:Value.(function
                 | Unit -> Unit
                 | Bool _ -> Bool true
                 | Int n -> Int (n + 1)
                 | _ -> failwithf "bug: matched captured type for %S" atom))
           defaults log)
-    | _ -> Printf.printf " e"; Error [`Match_not_found]
+    | _ -> printfn " e"; Error [`Match_not_found]
 end
 
 module Defaults = struct
