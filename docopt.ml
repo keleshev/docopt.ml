@@ -7,10 +7,9 @@ let (let*) = Result.bind
 
 module Chain = struct
   (* List with O(1) concatenation, but O(length) head *)
- 
   type 'a t = Empty | Singleton of 'a | Concat of 'a t * 'a t
-  (* invariant: for all Concat (x, y). x <> Empty && y <> Empty *)
 
+  let invariant = function Concat (Empty, Empty) -> false | _ -> true
   let empty = Empty
   let singleton x = Singleton x
 
@@ -24,13 +23,13 @@ module Chain = struct
     | Concat (x, y) -> concat (concat_map f x) (concat_map f y)
     | other -> other
 
-  let rec find predicate = function
-    | Singleton s when predicate s -> Some s
-    | Empty | Singleton _ -> None
+  let rec find_map callback = function
+    | Empty -> None
+    | Singleton s -> callback s
     | Concat (left, right) ->
-        match find predicate left with
-        | Some _ as result -> result
-        | None -> find predicate right
+        match find_map callback left with
+        | None -> find_map callback right
+        | result -> result
 end
 
 module Levenshtein = struct
@@ -82,8 +81,7 @@ module Map = struct
       match left, right with
       | Some x, None | None, Some x -> Some (one x)
       | Some l, Some r -> Some (both l r)
-      | None, None -> assert false
-    in
+      | None, None -> assert false in
     merge merger left right
 
   let keys t = fold (fun key _value list -> List.cons key list) t []
@@ -124,124 +122,87 @@ module Match = struct
     | Matched of string
 end
 
-module Pattern = struct
-  type t =
-    | Discrete of Atom.t (* <x>       *)
-    | Sequence of t * t  (* <x> <y>   *)
-    | Junction of t * t  (* <x> | <y> *)
-    | Optional of t      (* [<x>]     *)
-    | Multiple of t      (* <x>...    *)
+module NFA = struct
+  type state = {id: int; transitions: transition array}
+    (* {id; transitions=[|Consume (a, s)|]} is (id)--a-->(s) *)
 
+  and transition =
+    | Consume of Atom.t * state  (* Consume (a, s) is •--a-->(s) *)
+    | Epsilon of state           (* Epsilon s      is •--ε-->(s) *)
 
-  module NFA = struct
-    type state = {id: int; transitions: transition array}
-      (* {id; transitions=[|Consume (a, s)|]} is (id)--a-->(s) *)
+  let invariant = function
+    | {id=0; transitions=[||]} -> true (* final state *)
+    | {id=_; transitions=[||]} | {id=0; transitions=_} -> false
+    | _ -> true
 
-    and transition =
-      | Consume of Atom.t * state  (* Consume (a, s) is •-a->(s) *)
-      | Epsilon of state           (* Epsilon s    is •-ε->(s) *)
+  let create =
+    let counter = ref 0 in
+    fun transitions -> (incr counter; {id= !counter; transitions})
 
-    type t = state
+  let final = {id=0; transitions=[||]}
+  let is_final {id; _} = (id = 0)
 
-    let invariant = function
-      | {id=0; transitions=[||]} -> true (* final state *)
-      | {id=_; transitions=[||]} | {id=0; transitions=_} -> false
-      | _ -> true
+  module Set = struct (* Mutable hash set of states *)
+    module H = Hashtbl.Make (struct
+      type t = state
+      let equal {id=a; _} {id=b; _} = (a = b)
+      let hash {id; _} = Hashtbl.hash id
+    end)
 
-    let create =
-      let counter = ref 0 in
-      fun transitions -> (incr counter; {id= !counter; transitions})
+    type t = unit H.t
+    
+    let create () = H.create 64
+    let add t key = H.add t key ()
+    let mem = H.mem
+  end
 
-    let final = {id=0; transitions=[||]}
-    let is_final {id; _} = (id = 0)
+  let rec visit_transition transition log input visited =
+    match transition, input with
+    | Epsilon state, _ ->
+        visit_state state log input visited
+    | Consume (Argument a, state), Some arg ->
+        printfn "%d: %S => %S" state.id a arg;
+        Chain.singleton (state, Match.Captured (a, arg) :: log) 
+    | Consume (Command c, state), Some arg when c = arg ->
+        printfn "%d: %S" state.id c;
+        Chain.singleton (state, Match.Matched c :: log)
+    | Consume (Argument _, _), None
+    | Consume (Command _, _), _ ->
+        Chain.empty
 
-    module Set = struct 
-      module H = Hashtbl.Make (struct
-        type nonrec t = t
-        let equal {id=a; _} {id=b; _} = (a = b)
-        let hash {id; _} = Hashtbl.hash id
-      end)
-
-      type t = unit H.t
-      
-      let create () = H.create 64
-      let add t key = H.add t key ()
-      let mem = H.mem
+  and visit_state ({transitions; _} as state) log input visited =
+    if Set.mem visited state then 
+      Chain.empty (* Key optimisation: avoid visiting states many times *)
+    else begin
+      Set.add visited state;
+      if is_final state && input = None then
+        Chain.singleton (state, log)
+      else
+        let folder transition chain =
+          (* Concat in reverse order -- why? *)
+          Chain.concat chain (visit_transition transition log input visited)
+        in
+        Array.fold_right folder transitions Chain.empty
     end
 
-    let rec eval_transition transition log input visited =
-      match transition, input with
-      | Epsilon state, _ ->
-          eval_state state log input visited
-      | Consume (Argument a, state), Some arg ->
-          printfn "%d: %S => %S" state.id a arg;
-          Chain.singleton (state, Match.Captured (a, arg) :: log) 
-      | Consume (Command c, state), Some arg when c = arg ->
-          printfn "%d: %S" state.id c;
-          Chain.singleton (state, Match.Matched c :: log)
-      | Consume (Argument _, _), None
-      | Consume (Command _, _), _ ->
-          Chain.empty
+  let visit_chain chain input =
+    let visited = Set.create () in
+    chain |> Chain.concat_map (fun (state, log) ->
+      visit_state state log input visited)
 
-    and eval_state ({transitions; _} as state) log input visited =
-      if Set.mem visited state then Chain.empty else begin
-        Set.add visited state;
-        if is_final state && input = None then
-          Chain.singleton (state, log)
-        else
-          let folder transition chain =
-            (* Concat in revers order -- why? *)
-            Chain.concat chain (eval_transition transition log input visited)
-          in
-          Array.fold_right folder transitions Chain.empty
-      end
+  let rec run_chain chain = function
+    | [] -> 
+        let chain = visit_chain chain None in
+        let f (state, log) = if is_final state then Some log else None in
+        Chain.find_map f chain
+    | head :: tail ->
+        let chain = visit_chain chain (Some head) in
+        run_chain chain tail
 
-    let eval_chain chain input =
-      let visited = Set.create () in
-      chain |> Chain.concat_map (fun (state, log) ->
-        eval_state state log input visited)
-
-    let rec run chain = function
-      | [] -> 
-          let chain = eval_chain chain None in
-          Chain.find (fun (state, _log) -> is_final state) chain
-      | head :: tail ->
-          let chain = eval_chain chain (Some head) in
-          run chain tail
-  end
-  open NFA
-
-  let rec to_nfa ?(next=NFA.final) = function
-    | Discrete atom -> NFA.create [|Consume (atom, next)|]
-    | Sequence (first, second) -> to_nfa first ~next:(to_nfa second ~next)
-    | Junction (left, right) ->
-        NFA.create [|
-          Epsilon (to_nfa left ~next); 
-          Epsilon (to_nfa right ~next);
-        |]
-    | Optional t ->
-        NFA.create [|
-          Epsilon (to_nfa t ~next); 
-          Epsilon next;
-        |]
-    | Multiple t -> 
-       let transitions = [|
-          Epsilon NFA.final; (* mutated below *)
-          Epsilon next;
-       |] in
-       let state = to_nfa t ~next:(create transitions) in
-       transitions.(0) <- Epsilon state;
-       state
-
-  (* <x> [<y>] [<z>] <w> - Report ambiguous grammars? 
-     How to report a matching error?
-     [-xyz] vs [x y] meaning? 
-     Matching performance? *)
-
-  let run pattern ~argv ~defaults =
-    let nfa = to_nfa pattern in
-    match NFA.run (Chain.singleton (nfa, [])) argv with
-    | Some (_, log) ->
+  let run nfa ~argv ~defaults =
+    match run_chain (Chain.singleton (nfa, [])) argv with
+    | None -> printfn " e"; Error [`Match_not_found]
+    | Some log ->
         Ok (List.fold_left (fun map -> function
           | Match.Captured (atom, value) ->
               printfn "Captured (%S, %S)" atom value;
@@ -258,7 +219,42 @@ module Pattern = struct
                 | Int n -> Int (n + 1)
                 | _ -> failwithf "bug: matched captured type for %S" atom))
           defaults log)
-    | _ -> printfn " e"; Error [`Match_not_found]
+end
+
+module Pattern = struct
+  type t =
+    | Discrete of Atom.t (* <x>       *)
+    | Sequence of t * t  (* <x> <y>   *)
+    | Junction of t * t  (* <x> | <y> *)
+    | Optional of t      (* [<x>]     *)
+    | Multiple of t      (* <x>...    *)
+
+  let rec compile ?(next=NFA.final) = let open NFA in function
+    | Discrete atom -> NFA.create [|Consume (atom, next)|]
+    | Sequence (first, second) -> compile first ~next:(compile second ~next)
+    | Junction (left, right) ->
+        NFA.create [|
+          Epsilon (compile left ~next); 
+          Epsilon (compile right ~next);
+        |]
+    | Optional t ->
+        NFA.create [|
+          Epsilon (compile t ~next); 
+          Epsilon next;
+        |]
+    | Multiple t -> 
+       let transitions = [|
+          Epsilon NFA.final; (* mutated below *)
+          Epsilon next;
+       |] in
+       let state = compile t ~next:(create transitions) in
+       transitions.(0) <- Epsilon state;
+       state
+
+  (* <x> [<y>] [<z>] <w> - Report ambiguous grammars? 
+     How to report a matching error?
+     [-xyz] vs [x y] meaning? 
+     Matching performance? *)
 end
 
 module Defaults = struct
@@ -421,12 +417,14 @@ let type_check type_env value_env =
   ) type_env [] in
   if errors = [] then Ok () else Error errors
 
-let run: type a. argv:string list -> doc:Pattern.t -> a Term.t -> (a, _) result =
-  fun ~argv ~doc term ->
+let run
+  : type a. argv:string list -> doc:Pattern.t -> a Term.t -> (a, _) result 
+  = fun ~argv ~doc term ->
     let type_env = Term.infer term in
     let defaults = Defaults.infer doc in
     let* () = type_check type_env defaults in
-    let* env = Pattern.run doc ~argv ~defaults in
+    let nfa = Pattern.compile doc in
+    let* env = NFA.run nfa ~argv ~defaults in
     Ok (Term.eval term ~env)
 
 (* Exports *)
