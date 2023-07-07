@@ -13,6 +13,8 @@ module Chain = struct
   let empty = Empty
   let singleton x = Singleton x
 
+  let pair a b = Concat (Singleton a, Singleton b)
+
   let concat a b =
     match a, b with
     | Empty, x | x, Empty -> x
@@ -20,8 +22,11 @@ module Chain = struct
 
   let rec concat_map f = function
     | Singleton s -> f s
-    | Concat (x, y) -> concat (concat_map f x) (concat_map f y)
-    | other -> other
+    | Concat (x, y) -> 
+        let left = concat_map f x
+        and right = concat_map f y in 
+        concat left right
+    | Empty as other -> other
 
   let rec find_map callback = function
     | Empty -> None
@@ -123,17 +128,20 @@ module Match = struct
 end
 
 module NFA = struct
-  type state = {id: int; transitions: transition array}
+  type state = {id: int; mutable transitions: transition Chain.t}
   and transition = Consume of Atom.t * state | Epsilon of state
-  (* {id; transitions=[|Consume (a, s)|]}  is  (id)--a-->(s)
-     {id; transitions=[|Epsilon s|]}       is  (id)--ε-->(s) *)
+  (* {id; transitions=Chain.singleton (Consume (a, s))}  is  (id)--a-->(s)
+     {id; transitions=Chain.singleton (Epsilon s)}       is  (id)--ε-->(s) *)
 
   let create =
     let counter = ref 0 in
     fun transitions -> (incr counter; {id= !counter; transitions})
 
-  let final = create [||]
-  let is_final = function {transitions=[||]; _} -> true | _ -> false
+  let arrow transition = create (Chain.singleton transition)
+  let fork a b = create (Chain.pair a b)
+
+  let final = create Chain.Empty
+  let is_final = function {transitions=Chain.Empty; _} -> true | _ -> false
 
   module Set = struct (* Mutable hash set of states *)
     module H = Hashtbl.Make (struct
@@ -171,11 +179,8 @@ module NFA = struct
       if is_final state && input = None then
         Chain.singleton (state, log)
       else
-        let folder transition chain =
-          (* Concat in reverse order -- why? *)
-          Chain.concat chain (visit_transition transition log input visited)
-        in
-        Array.fold_right folder transitions Chain.empty
+        transitions |> Chain.concat_map (fun transition ->
+          visit_transition transition log input visited)
     end
 
   let visit_chain chain input =
@@ -222,26 +227,24 @@ module Pattern = struct
     | Optional of t      (* [<x>]     *)
     | Multiple of t      (* <x>...    *)
 
+
+  (*module Compiler = struct
+w
+    let arrow atom target = NFA.create (Chain.singleton
+
+  end*)
+
   let rec compile ?(next=NFA.final) = let open NFA in function
-    | Discrete atom -> NFA.create [|Consume (atom, next)|]
+    | Discrete atom -> NFA.arrow (Consume (atom, next))
     | Sequence (first, second) -> compile first ~next:(compile second ~next)
     | Junction (left, right) ->
-        NFA.create [|
-          Epsilon (compile left ~next); 
-          Epsilon (compile right ~next);
-        |]
+        NFA.fork (Epsilon (compile left ~next)) (Epsilon (compile right ~next))
     | Optional t ->
-        NFA.create [|
-          Epsilon (compile t ~next); 
-          Epsilon next;
-        |]
+        NFA.fork (Epsilon (compile t ~next)) (Epsilon next)
     | Multiple t -> 
-       let transitions = [|
-          Epsilon NFA.final; (* mutated below *)
-          Epsilon next;
-       |] in
-       let state = compile t ~next:(create transitions) in
-       transitions.(0) <- Epsilon state;
+       let todo = NFA.create Chain.empty in
+       let state = compile t ~next:todo in
+       todo.transitions <- Chain.pair (Epsilon state) (Epsilon next);
        state
 
   (* <x> [<y>] [<z>] <w> - Report ambiguous grammars? 
