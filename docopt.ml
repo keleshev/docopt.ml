@@ -124,23 +124,16 @@ end
 
 module NFA = struct
   type state = {id: int; transitions: transition array}
-    (* {id; transitions=[|Consume (a, s)|]} is (id)--a-->(s) *)
-
-  and transition =
-    | Consume of Atom.t * state  (* Consume (a, s) is •--a-->(s) *)
-    | Epsilon of state           (* Epsilon s      is •--ε-->(s) *)
-
-  let invariant = function
-    | {id=0; transitions=[||]} -> true (* final state *)
-    | {id=_; transitions=[||]} | {id=0; transitions=_} -> false
-    | _ -> true
+  and transition = Consume of Atom.t * state | Epsilon of state
+  (* {id; transitions=[|Consume (a, s)|]}  is  (id)--a-->(s)
+     {id; transitions=[|Epsilon s|]}       is  (id)--ε-->(s) *)
 
   let create =
     let counter = ref 0 in
     fun transitions -> (incr counter; {id= !counter; transitions})
 
-  let final = {id=0; transitions=[||]}
-  let is_final {id; _} = (id = 0)
+  let final = create [||]
+  let is_final = function {transitions=[||]; _} -> true | _ -> false
 
   module Set = struct (* Mutable hash set of states *)
     module H = Hashtbl.Make (struct
