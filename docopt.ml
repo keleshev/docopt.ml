@@ -381,19 +381,19 @@ module Term = struct
   type _ t =
     | Get: 'a Type.t * string -> 'a t
     | Map: ('a -> 'b) * 'a t -> 'b t
-    | Both: 'a t * 'b t -> ('a * 'b) t
+    | Tuple: 'a t * 'b t -> ('a * 'b) t
   
   (** Infer environment of all type annotations *)
   let rec infer: type a. a t -> Type.Dynamic.Set.t Map.t = function
     | Get (t, atom) -> Map.singleton atom (Set.singleton (Type.to_dynamic t))
     | Map (_callback, term) -> infer term
-    | Both (left, right) -> Map.merge ~both:Set.union (infer left) (infer right)
+    | Tuple (left, right) -> Map.merge ~both:Set.union (infer left) (infer right)
 
   (** Evaluate term by looking up values in the map *)
   let rec eval: type a. env:(Value.t Map.t) -> a t -> a = fun ~env -> function
     | Get (t, atom) -> Type.cast t (find atom env)
     | Map (callback, term) -> callback (eval ~env term)
-    | Both (left, right) -> eval ~env left, eval ~env right
+    | Tuple (left, right) -> eval ~env left, eval ~env right
 end
 
 let type_check type_env value_env =
@@ -427,9 +427,9 @@ let run
 
 let get type_annotation atom = Term.Get (type_annotation, atom)
 let map callback term = Term.Map (callback, term)
-let both first second = Term.Both (first, second)
+let tuple first second = Term.Tuple (first, second)
 let (let+) term callback = map callback term
-let (and+) = both
+let (and+) = tuple
 let unit = Type.Unit
 let bool = Type.Bool
 let int = Type.Int

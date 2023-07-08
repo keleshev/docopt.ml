@@ -44,6 +44,22 @@ module Test_string_option_list = struct
       => Ok ("a", None, ["b"]) 
 end
 
+module Test_explicit_tuple = struct
+  let _doc = "usage: prog <string> [<option>] <list>..."
+  let doc = !"<string>" <*> Optional !"<option>" <*> Multiple !"<list>"
+
+  let main =
+    let open Docopt in
+    let+ s = get string "<string>"
+    and+ o, l = tuple (get (option string) "<option>") (get (list string) "<list>") in
+    s, o, l
+
+  let () =
+    Docopt.run main ~doc ~argv:["a"; "b"; "c"; "d"]
+      => Ok ("a", Some "b", ["c"; "d"]) 
+end
+
+
 module Test_russ_cox_pathological_example = struct
   let _doc = "usage: prog [a] [a] [a] [a] a a a a"
   let doc = Optional !"a" <*> Optional !"a" 
