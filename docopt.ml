@@ -154,10 +154,10 @@ module NFA = struct
     let mem = H.mem
   end
 
-  let rec visit_transition transition log input visited =
+  let rec visit_transition transition log ~input ~visited =
     match transition, input with
     | Epsilon state, _ ->
-        visit_state state log input visited
+        visit_state_log (state, log) ~input ~visited
     | Consume (Argument a, state), Some arg ->
         printfn "%d: %S => %S" state.id a arg;
         Chain.singleton (state, Match.Captured (a, arg) :: log) 
@@ -168,7 +168,7 @@ module NFA = struct
     | Consume (Command _, _), _ ->
         Chain.empty
 
-  and visit_state ({transitions; _} as state) log input visited =
+  and visit_state_log ({transitions; _} as state, log) ~input ~visited =
     if Set.mem visited state then 
       Chain.empty (* Key optimisation: avoid visiting states many times *)
     else begin
@@ -177,13 +177,12 @@ module NFA = struct
         Chain.singleton (state, log)
       else
         transitions |> Chain.concat_map (fun transition ->
-          visit_transition transition log input visited)
+          visit_transition transition log ~input ~visited)
     end
 
   let visit_chain chain input =
     let visited = Set.create () in
-    chain |> Chain.concat_map (fun (state, log) ->
-      visit_state state log input visited)
+    Chain.concat_map (visit_state_log ~input ~visited) chain
 
   let rec run_chain chain = function
     | [] -> 
