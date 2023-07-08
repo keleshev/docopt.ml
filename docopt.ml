@@ -137,9 +137,6 @@ module NFA = struct
     let counter = ref 0 in
     fun transitions -> (incr counter; {id= !counter; transitions})
 
-  let arrow transition = create (Chain.singleton transition)
-  let fork a b = create (Chain.pair a b)
-
   let final = create Chain.Empty
   let is_final = function {transitions=Chain.Empty; _} -> true | _ -> false
 
@@ -228,24 +225,28 @@ module Pattern = struct
     | Multiple of t      (* <x>...    *)
 
 
-  (*module Compiler = struct
-w
-    let arrow atom target = NFA.create (Chain.singleton
+  module Compiler = struct
+    let arrow atom next =
+      NFA.create (Chain.singleton (NFA.Consume (atom, next)))
 
-  end*)
+    let fork left right =
+      NFA.create (Chain.pair (NFA.Epsilon left) (NFA.Epsilon right))
 
-  let rec compile ?(next=NFA.final) = let open NFA in function
-    | Discrete atom -> NFA.arrow (Consume (atom, next))
-    | Sequence (first, second) -> compile first ~next:(compile second ~next)
-    | Junction (left, right) ->
-        NFA.fork (Epsilon (compile left ~next)) (Epsilon (compile right ~next))
-    | Optional t ->
-        NFA.fork (Epsilon (compile t ~next)) (Epsilon next)
-    | Multiple t -> 
-       let todo = NFA.create Chain.empty in
-       let state = compile t ~next:todo in
-       todo.transitions <- Chain.pair (Epsilon state) (Epsilon next);
-       state
+    let loop callback next =
+      let todo = NFA.create Chain.empty in
+      let state = callback todo in
+      todo.transitions <- (fork state next).transitions;
+      state
+
+    let rec run ~next = function
+      | Discrete atom -> arrow atom next
+      | Sequence (first, second) -> run first ~next:(run second ~next)
+      | Junction (left, right) -> fork (run left ~next) (run right ~next)
+      | Optional t -> fork (run t ~next) next
+      | Multiple t -> loop (fun self -> run t ~next:(fork self next)) next
+  end
+
+  let compile = Compiler.run ~next:NFA.final
 
   (* <x> [<y>] [<z>] <w> - Report ambiguous grammars? 
      How to report a matching error?
