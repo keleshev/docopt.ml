@@ -9,10 +9,10 @@ module Chain = struct
   (* List with O(1) concatenation, but O(length) head *)
   type 'a t = Empty | Singleton of 'a | Concat of 'a t * 'a t
 
-  let invariant = function Concat (Empty, Empty) -> false | _ -> true
+  let _invariant = function Concat (Empty, Empty) -> false | _ -> true
+  let is_empty = function Empty -> true | _ -> false
   let empty = Empty
   let singleton x = Singleton x
-
   let pair a b = Concat (Singleton a, Singleton b)
 
   let concat a b =
@@ -137,8 +137,8 @@ module NFA = struct
     let counter = ref 0 in
     fun transitions -> (incr counter; {id= !counter; transitions})
 
-  let final = create Chain.Empty
-  let is_final = function {transitions=Chain.Empty; _} -> true | _ -> false
+  let final = create Chain.empty
+  let is_final = function {transitions; _} -> Chain.is_empty transitions
 
   module Set = struct (* Mutable hash set of states *)
     module H = Hashtbl.Make (struct
@@ -223,7 +223,6 @@ module Pattern = struct
     | Junction of t * t  (* <x> | <y> *)
     | Optional of t      (* [<x>]     *)
     | Multiple of t      (* <x>...    *)
-
 
   module Compiler = struct
     let arrow atom next =
