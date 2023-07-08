@@ -89,6 +89,8 @@ module Map = struct
       | None, None -> assert false in
     merge merger left right
 
+  let add ~key ~value map = add key value map
+
   let keys t = fold (fun key _value list -> List.cons key list) t []
 
   (** Change value for key, fail if key not already present *)
@@ -96,6 +98,11 @@ module Map = struct
     map |> update key (function
       | Some x -> Some (f x) 
       | None -> failwithf "invalid key %S" key)
+
+  let find key map ?(error=`Not_founc) =
+    match find_opt key map with
+    | Some value -> Ok value
+    | None -> Error error
 end
 
 module Atom = struct
@@ -250,6 +257,52 @@ module Pattern = struct
      How to report a matching error?
      [-xyz] vs [x y] meaning? 
      Matching performance? *)
+end
+
+module Option = struct
+  module Spec = struct
+    type t = {synonyms: string list; argument: bool}
+  end
+
+  module Value = struct
+    type t = Count of int | Arguments of string list
+  end
+end
+
+let starts_with prefix string = String.starts_with ~prefix string
+
+let slice_on char string =
+  match index_opt string char with
+  | None -> string, None
+  | Some i -> sub string 0 i, Some (sub string (i + 1) (length string - i - 1))
+
+
+module Argv = struct
+  let parse argv ~specs ~values ~counts =
+    match argv with
+    | head :: tail when starts_with "--" head ->
+       let option, maybe_argument = slice_on '=' head in
+       let* spec = Map.find option specs ~error:(`Unknown_option head) in
+       match spec, maybe_argument with
+       | {synonyms; argument=true}, Some argument ->
+           let values = Multimap.add synonyms argument values in
+           parse tail ~specs ~values ~counts
+       | {synonyms; argument=true}, None ->
+           match tail with
+           | [] -> Error (`Option_requires_argument option)
+           | argument :: tail -> Multimap.add synonyms argument
+               let values = Multimap.add synonyms argument values in
+               parse tail ~specs ~values ~counts
+       | {synonyms; argument=false}, Some argument ->
+           Error (`Unnecessary_option_argument head)
+       | {synonyms; argument=false}, None ->
+           let counts = Counts.add synonyms counts in
+    | [] -> args, values, counts
+
+end
+
+module Doc = struct
+  type t = {usage: Pattern.t; options: Option.t Map.t}
 end
 
 module Defaults = struct
