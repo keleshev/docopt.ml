@@ -1,12 +1,17 @@
 let (=>) left right = print_char (if left = right then '.' else 'F')
 
 open Docopt.Pattern
+module Doc = Docopt.Doc
+module Map = Docopt.Map
 let (<*>) l r = Sequence (l, r)
 let (!) source = Discrete (Docopt.Atom.parse source)
 
 module Test_unit_bool_int = struct
   let _doc = "usage: prog unit [bool] int..."
-  let doc = !"unit" <*> Optional !"bool" <*> Multiple !"int"
+  let doc = Doc.{
+    usage= !"unit" <*> Optional !"bool" <*> Multiple !"int";
+    options=Map.empty;
+  }
 
   let main =
     let open Docopt in
@@ -26,7 +31,10 @@ end
 
 module Test_string_option_list = struct
   let _doc = "usage: prog <string> [<option>] <list>..."
-  let doc = !"<string>" <*> Optional !"<option>" <*> Multiple !"<list>"
+  let doc = Doc.{
+    usage= !"<string>" <*> Optional !"<option>" <*> Multiple !"<list>";
+    options=Map.empty;
+  }
 
   let main =
     let open Docopt in
@@ -46,7 +54,10 @@ end
 
 module Test_explicit_tuple = struct
   let _doc = "usage: prog <string> [<option>] <list>..."
-  let doc = !"<string>" <*> Optional !"<option>" <*> Multiple !"<list>"
+  let doc = Doc.{
+    usage= !"<string>" <*> Optional !"<option>" <*> Multiple !"<list>";
+    options=Map.empty;
+  }
 
   let main =
     let open Docopt in
@@ -62,9 +73,12 @@ end
 
 module Test_russ_cox_pathological_example = struct
   let _doc = "usage: prog [a] [a] [a] [a] a a a a"
-  let doc = Optional !"a" <*> Optional !"a" 
+  let doc = Doc.{
+    usage= Optional !"a" <*> Optional !"a" 
         <*> Optional !"a" <*> Optional !"a" 
-        <*> !"a" <*> !"a" <*> !"a" <*> !"a"
+        <*> !"a" <*> !"a" <*> !"a" <*> !"a";
+    options=Map.empty;
+  }
 
   let main = Docopt.(get int "a")
 
@@ -79,7 +93,10 @@ module Test_russ_cox_pathological_example_large = struct
   let a4 = !"a" <*> !"a" <*> !"a" <*> !"a"
   let aq16 = aq4 <*> aq4 <*> aq4 <*> aq4
   let a16 = a4 <*> a4 <*> a4 <*> a4
-  let doc = aq16 <*> aq16 <*> a16 <*> a16
+  let doc = Doc.{
+    usage=aq16 <*> aq16 <*> a16 <*> a16;
+    options=Map.empty;
+  }
 
   let main = Docopt.(get int "a")
 
@@ -91,7 +108,10 @@ end
 
 module Test_another_pathological_example = struct
   let _doc = "usage: prog [[a]...]..."
-  let doc = Multiple (Optional (Multiple (Optional !"a")))
+  let doc = Doc.{
+    usage=Multiple (Optional (Multiple (Optional !"a")));
+    options=Map.empty;
+  }
 
   let main = Docopt.(get int "a")
 

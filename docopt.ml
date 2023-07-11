@@ -5,6 +5,16 @@ let debug = false
 let printfn x = Printf.ksprintf (if debug then print_endline else (fun _ -> ())) x
 let (let*) = Result.bind
 
+module String = struct
+  include String
+
+  let slice_on char string =
+    match index_opt string char with
+    | None -> string, None
+    | Some i -> 
+        sub string 0 i, Some (sub string (i + 1) (length string - i - 1))
+end
+
 module Chain = struct
   (* List with O(1) concatenation, but O(length) head *)
   type 'a t = Empty | Singleton of 'a | Concat of 'a t * 'a t
@@ -99,10 +109,14 @@ module Map = struct
       | Some x -> Some (f x) 
       | None -> failwithf "invalid key %S" key)
 
-  let find key map ?(error=`Not_founc) =
+  let find ~error key map =
     match find_opt key map with
     | Some value -> Ok value
     | None -> Error error
+
+  let of_list list =
+    let cons (key, value) map = add ~key ~value map in
+    List.fold_right cons list empty
 end
 
 module Atom = struct
@@ -200,8 +214,8 @@ module NFA = struct
         let chain = visit_chain chain (Some head) in
         run_chain chain tail
 
-  let run nfa ~argv ~defaults =
-    match run_chain (Chain.singleton (nfa, [])) argv with
+  let run nfa ~args ~defaults =
+    match run_chain (Chain.singleton (nfa, [])) args with
     | None -> printfn " e"; Error [`Match_not_found]
     | Some log ->
         Ok (List.fold_left (fun map -> function
@@ -260,45 +274,50 @@ module Pattern = struct
 end
 
 module Option = struct
-  module Spec = struct
-    type t = {synonyms: string list; argument: bool}
-  end
-
-  module Value = struct
-    type t = Count of int | Arguments of string list
-  end
+  type t = {name: string; argument: bool}
 end
 
 let starts_with prefix string = String.starts_with ~prefix string
 
-let slice_on char string =
-  match index_opt string char with
-  | None -> string, None
-  | Some i -> sub string 0 i, Some (sub string (i + 1) (length string - i - 1))
+module Counter = struct
+  type t = int Map.t
 
+  let add ~key map = 
+    let count = match Map.find key map ~error:0 with Ok n -> n | _ -> 0 in
+    Map.add map ~key ~value:(count + 1)
+end
 
 module Argv = struct
-  let parse argv ~specs ~values ~counts =
+  (* TODO more tha one error? *)
+  let rec aux argv ~specs ~args ~values ~counts =
     match argv with
-    | head :: tail when starts_with "--" head ->
-       let option, maybe_argument = slice_on '=' head in
-       let* spec = Map.find option specs ~error:(`Unknown_option head) in
+    | [] -> Ok (List.rev args, values, counts)
+    | head :: tail when starts_with "--" head -> (
+       let option, maybe_argument = String.slice_on '=' head in
+       let* spec: Option.t =
+         Map.find option specs ~error:[`Unknown_option head] in
        match spec, maybe_argument with
-       | {synonyms; argument=true}, Some argument ->
-           let values = Multimap.add synonyms argument values in
-           parse tail ~specs ~values ~counts
-       | {synonyms; argument=true}, None ->
+       | {name; argument=true}, Some argument ->
+           let values = Map.add ~key:name ~value:argument values in
+           aux tail ~specs ~args ~values ~counts
+       | {name; argument=true}, None -> (
            match tail with
-           | [] -> Error (`Option_requires_argument option)
-           | argument :: tail -> Multimap.add synonyms argument
-               let values = Multimap.add synonyms argument values in
-               parse tail ~specs ~values ~counts
-       | {synonyms; argument=false}, Some argument ->
-           Error (`Unnecessary_option_argument head)
-       | {synonyms; argument=false}, None ->
-           let counts = Counts.add synonyms counts in
-    | [] -> args, values, counts
+           | [] -> Error [`Option_requires_argument option]
+           | head :: _ when starts_with "-" head ->
+               Error [`Option_requires_argument_got (option, head)]
+           | argument :: tail ->
+               let values = Map.add ~key:name ~value:argument values in
+               aux tail ~specs ~args ~values ~counts)
+       | {name; argument=false}, Some _argument ->
+           Error [`Unnecessary_option_argument name]
+       | {name; argument=false}, None ->
+           let counts = Counter.add ~key:name counts in
+           aux tail ~specs ~args ~values ~counts)
+    | head :: tail ->
+        aux tail ~specs ~args:(head :: args) ~values ~counts
 
+  let parse argv ~specs =
+    aux argv ~specs ~args:[] ~values:Map.empty ~counts:Map.empty
 end
 
 module Doc = struct
@@ -466,13 +485,14 @@ let type_check type_env value_env =
   if errors = [] then Ok () else Error errors
 
 let run
-  : type a. argv:string list -> doc:Pattern.t -> a Term.t -> (a, _) result 
+  : type a. argv:string list -> doc:Doc.t -> a Term.t -> (a, _) result 
   = fun ~argv ~doc term ->
     let type_env = Term.infer term in
-    let defaults = Defaults.infer doc in
+    let defaults = Defaults.infer doc.usage in
     let* () = type_check type_env defaults in
-    let nfa = Pattern.compile doc in
-    let* env = NFA.run nfa ~argv ~defaults in
+    let nfa = Pattern.compile doc.usage in
+    let* args, _values, _counts = Argv.parse argv ~specs:doc.options in
+    let* env = NFA.run nfa ~args ~defaults in
     Ok (Term.eval term ~env)
 
 (* Exports *)
