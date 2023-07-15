@@ -1,8 +1,10 @@
 let sprintf = Printf.sprintf
-
 let failwithf x = Printf.ksprintf failwith x
 let debug = false
 let printfn x = Printf.ksprintf (if debug then print_endline else (fun _ -> ())) x
+let starts_with prefix string = String.starts_with ~prefix string
+let (or) option error = match option with Some x -> Ok x | None -> Error error
+
 let (let*) = Result.bind
 
 module String = struct
@@ -109,10 +111,9 @@ module Map = struct
       | Some x -> Some (f x) 
       | None -> failwithf "invalid key %S" key)
 
-  let find ~error key map =
-    match find_opt key map with
-    | Some value -> Ok value
-    | None -> Error error
+  let find_exn = find
+  let find = find_opt
+
 
   let of_list list =
     let cons (key, value) map = add ~key ~value map in
@@ -125,11 +126,12 @@ module Atom = struct
     | Short of string
 
   type t =
+    (* Option of string * string option *)
     | Command of string
     | Argument of string
 
   let parse source = (* TODO: this is a temp stub *)
-    if String.starts_with ~prefix:"<" source then Argument source else Command source
+    if starts_with "<" source then Argument source else Command source
 end
 
 module Value = struct
@@ -277,42 +279,39 @@ module Option = struct
   type t = {name: string; argument: bool}
 end
 
-let starts_with prefix string = String.starts_with ~prefix string
-
 module Counter = struct
   type t = int Map.t
 
   let add ~key map = 
-    let count = match Map.find key map ~error:0 with Ok n -> n | _ -> 0 in
+    let count = match Map.find key map with Some x -> x | _ -> 0 in
     Map.add map ~key ~value:(count + 1)
 end
 
 module Argv = struct
-  (* TODO more tha one error? *)
+  (* TODO more than one error? *)
   let rec aux argv ~specs ~args ~values ~counts =
     match argv with
     | [] -> Ok (List.rev args, values, counts)
     | head :: tail when starts_with "--" head -> (
-       let option, maybe_argument = String.slice_on '=' head in
-       let* spec: Option.t =
-         Map.find option specs ~error:[`Unknown_option head] in
-       match spec, maybe_argument with
-       | {name; argument=true}, Some argument ->
-           let values = Map.add ~key:name ~value:argument values in
-           aux tail ~specs ~args ~values ~counts
-       | {name; argument=true}, None -> (
-           match tail with
-           | [] -> Error [`Option_requires_argument option]
-           | head :: _ when starts_with "-" head ->
-               Error [`Option_requires_argument_got (option, head)]
-           | argument :: tail ->
-               let values = Map.add ~key:name ~value:argument values in
-               aux tail ~specs ~args ~values ~counts)
-       | {name; argument=false}, Some _argument ->
-           Error [`Unnecessary_option_argument name]
-       | {name; argument=false}, None ->
-           let counts = Counter.add ~key:name counts in
-           aux tail ~specs ~args ~values ~counts)
+        let option, maybe_argument = String.slice_on '=' head in
+        let* spec = Map.find option specs or [`Unknown_option head] in
+        match (spec: Option.t), maybe_argument with
+        | {name; argument=true}, Some argument ->
+            let values = Map.add ~key:name ~value:argument values in
+            aux tail ~specs ~args ~values ~counts
+        | {name; argument=true}, None -> (
+            match tail with
+            | [] -> Error [`Option_requires_argument option]
+            | head :: _ when starts_with "-" head ->
+                Error [`Option_requires_argument_got (option, head)]
+            | argument :: tail ->
+                let values = Map.add ~key:name ~value:argument values in
+                aux tail ~specs ~args ~values ~counts)
+        | {name; argument=false}, Some _argument ->
+            Error [`Unnecessary_option_argument name]
+        | {name; argument=false}, None ->
+            let counts = Counter.add ~key:name counts in
+            aux tail ~specs ~args ~values ~counts)
     | head :: tail ->
         aux tail ~specs ~args:(head :: args) ~values ~counts
 
@@ -346,7 +345,6 @@ module Defaults = struct
     | Junction (left, right) ->
         Map.merge (infer left) (infer right) ~both:max ~one:optionalize
 end  
-
 
 module Type = struct
   type _ t =
@@ -443,11 +441,6 @@ end
 
 module Set = Type.Dynamic.Set
 
-let find key map = 
-  match Map.find_opt key map with
-  | None -> failwithf "bug: missing key %S after type check" key
-  | Some value -> value
-
 module Term = struct
   type _ t =
     | Get: 'a Type.t * string -> 'a t
@@ -462,7 +455,7 @@ module Term = struct
 
   (** Evaluate term by looking up values in the map *)
   let rec eval: type a. env:(Value.t Map.t) -> a t -> a = fun ~env -> function
-    | Get (t, atom) -> Type.cast t (find atom env)
+    | Get (t, atom) -> Type.cast t (Map.find_exn atom env)
     | Map (callback, term) -> callback (eval ~env term)
     | Tuple (left, right) -> eval ~env left, eval ~env right
 end
@@ -470,7 +463,7 @@ end
 let type_check type_env value_env =
   let errors = Map.fold (fun atom types errors ->
     Set.fold (fun dynamic_type errors ->
-       match Map.find_opt atom value_env with
+       match Map.find atom value_env with
        | None ->
            let error = atom, Type.Dynamic.to_string dynamic_type, Map.keys value_env in
            `Atom_not_found error :: errors
