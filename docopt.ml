@@ -7,6 +7,18 @@ let (or) option error = match option with Some x -> Ok x | None -> Error error
 
 let (let*) = Result.bind
 
+module Result = struct
+  include Result
+  
+  let to_either = function Ok ok -> Either.Left ok | Error e -> Either.Right e
+end
+
+module List = struct
+  include List
+
+  let fold ~cons ~nil list = fold_right cons list nil
+end
+
 module String = struct
   include String
 
@@ -103,7 +115,7 @@ module Map = struct
 
   let add ~key ~value map = add key value map
 
-  let keys t = fold (fun key _value list -> List.cons key list) t []
+  let keys t = fold (fun key _value list -> key :: list) t []
 
   (** Change value for key, fail if key not already present *)
   let replace_exn key ~f map =
@@ -117,7 +129,7 @@ module Map = struct
 
   let of_list list =
     let cons (key, value) map = add ~key ~value map in
-    List.fold_right cons list empty
+    List.fold ~cons ~nil:empty list
 end
 
 module Atom = struct
@@ -282,41 +294,65 @@ end
 module Counter = struct
   type t = int Map.t
 
+  let empty = Map.empty
+
   let add ~key map = 
     let count = match Map.find key map with Some x -> x | _ -> 0 in
     Map.add map ~key ~value:(count + 1)
 end
 
 module Argv = struct
-  (* TODO more than one error? *)
-  let rec aux argv ~specs ~args ~values ~counts =
-    match argv with
-    | [] -> Ok (List.rev args, values, counts)
+  (* We could parse argv immediately, but tokenizing error handling easier *)
+  type token =
+    | Option_with_argument of (string * string)
+    | Option_without_argument of string
+    | Argument of string
+  
+  (* Add argv to errors? Point out error location? *)
+  let rec scan ~specs = function
+    | [] -> []
+    | "--" :: tail -> List.map (fun a -> Ok (Argument a)) tail
     | head :: tail when starts_with "--" head -> (
         let option, maybe_argument = String.slice_on '=' head in
-        let* spec = Map.find option specs or [`Unknown_option head] in
-        match (spec: Option.t), maybe_argument with
-        | {name; argument=true}, Some argument ->
-            let values = Map.add ~key:name ~value:argument values in
-            aux tail ~specs ~args ~values ~counts
-        | {name; argument=true}, None -> (
+        match Map.find option specs, maybe_argument with
+        | None, _ -> Error (`Unknown_option head) :: scan ~specs tail
+        | Some Option.{name; argument=true}, Some argument ->
+            Ok (Option_with_argument (name, argument)) :: scan ~specs tail
+        | Some {name; argument=true}, None -> (
             match tail with
-            | [] -> Error [`Option_requires_argument option]
-            | head :: _ when starts_with "-" head ->
-                Error [`Option_requires_argument_got (option, head)]
-            | argument :: tail ->
-                let values = Map.add ~key:name ~value:argument values in
-                aux tail ~specs ~args ~values ~counts)
-        | {name; argument=false}, Some _argument ->
-            Error [`Unnecessary_option_argument name]
-        | {name; argument=false}, None ->
-            let counts = Counter.add ~key:name counts in
-            aux tail ~specs ~args ~values ~counts)
-    | head :: tail ->
-        aux tail ~specs ~args:(head :: args) ~values ~counts
+            | [] -> [Error (`Option_requires_argument name)]
+            | head :: tail when starts_with "-" head ->
+                let e = `Option_requires_argument_got (name, head) in
+                Error e :: scan ~specs tail
+            | head :: tail ->
+                Ok (Option_with_argument (name, head)) :: scan ~specs tail)
+        | Some {name; argument=false}, Some argument ->
+            let e = `Unnecessary_option_argument (name, argument) in
+            Error e :: scan ~specs tail
+        | Some {name; argument=false}, None ->
+            Ok (Option_without_argument name) :: scan ~specs tail)
+    | head :: tail -> 
+        Ok (Argument head) :: scan ~specs tail
+
+  let tokenize argv ~specs =
+    match List.partition_map Result.to_either (scan argv ~specs) with
+    | tokens, [] -> Ok tokens
+    | _, errors -> Error [`Tokenizer_errors (argv, errors)]
+
+  type t = {args: string list; values: string Map.t; counts: Counter.t}
 
   let parse argv ~specs =
-    aux argv ~specs ~args:[] ~values:Map.empty ~counts:Map.empty
+    let* tokens = tokenize argv ~specs in
+    let nil = {args=[]; values=Map.empty; counts=Counter.empty} in
+    let cons token t = match token with
+      | Option_with_argument (option, argument) ->
+          {t with values=Map.add ~key:option ~value:argument t.values}
+      | Option_without_argument option -> 
+          {t with counts=Counter.add ~key:option t.counts}
+      | Argument argument -> 
+          {t with args=argument :: t.args}
+    in
+    Ok (List.fold ~cons ~nil tokens)
 end
 
 module Doc = struct
@@ -484,7 +520,7 @@ let run
     let defaults = Defaults.infer doc.usage in
     let* () = type_check type_env defaults in
     let nfa = Pattern.compile doc.usage in
-    let* args, _values, _counts = Argv.parse argv ~specs:doc.options in
+    let* Argv.{args; _} = Argv.parse argv ~specs:doc.options in
     let* env = NFA.run nfa ~args ~defaults in
     Ok (Term.eval term ~env)
 
