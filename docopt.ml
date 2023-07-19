@@ -191,7 +191,7 @@ module NFA = struct
 
   let rec visit_transition transition log ~input ~visited =
     match transition, input with
-    | Epsilon state, _ ->
+    | Epsilon state, input ->
         visit_state_log (state, log) ~input ~visited
     | Consume (Argument a, state), Some arg ->
         printfn "%d: %S => %S" state.id a arg;
@@ -230,7 +230,7 @@ module NFA = struct
 
   let run nfa ~args ~defaults =
     match run_chain (Chain.singleton (nfa, [])) args with
-    | None -> printfn " e"; Error [`Match_not_found]
+    | None -> printfn " e"; Error [`Match_not_found] (* TODO: better report*)
     | Some log ->
         Ok (List.fold_left (fun map -> function
           | Match.Captured (atom, value) ->
@@ -339,6 +339,7 @@ module Argv = struct
     | tokens, [] -> Ok tokens
     | _, errors -> Error [`Tokenizer_errors (argv, errors)]
 
+  (** Pre-parsed argument vector *)
   type t = {args: string list; values: string Map.t; counts: Counter.t}
 
   let parse argv ~specs =
