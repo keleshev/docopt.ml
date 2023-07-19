@@ -132,13 +132,87 @@ module Map = struct
     List.fold ~cons ~nil:empty list
 end
 
+module Counter = struct
+  type t = int Map.t
+
+  let empty = Map.empty
+
+  let add ~key map = 
+    let count = match Map.find key map with Some x -> x | _ -> 0 in
+    Map.add map ~key ~value:(count + 1)
+end
+
+(* * *)
+
+module Option = struct
+  type t = {name: string; argument: bool}
+end
+
+module Argv = struct
+  (* We could parse argv directly, but tokenizing makes error handling easier *)
+  type token =
+    | Option_with_argument of (string * string)
+    | Option_without_argument of string
+    | Argument of string
+  
+  (* Add argv to errors? Point out error location? *)
+  let rec scan ~specs = function
+    | [] -> []
+    | "--" :: tail -> List.map (fun a -> Ok (Argument a)) tail
+    | head :: tail when starts_with "--" head -> (
+        let option, maybe_argument = String.slice_on '=' head in
+        match Map.find option specs, maybe_argument with
+        | None, _ -> Error (`Unknown_option head) :: scan ~specs tail
+        | Some Option.{name; argument=true}, Some argument ->
+            Ok (Option_with_argument (name, argument)) :: scan ~specs tail
+        | Some {name; argument=true}, None -> (
+            match tail with
+            | [] -> [Error (`Option_requires_argument name)]
+            | head :: tail when starts_with "-" head ->
+                let e = `Option_requires_argument_got (name, head) in
+                Error e :: scan ~specs tail
+            | head :: tail ->
+                Ok (Option_with_argument (name, head)) :: scan ~specs tail)
+        | Some {name; argument=false}, Some argument ->
+            let e = `Unnecessary_option_argument (name, argument) in
+            Error e :: scan ~specs tail
+        | Some {name; argument=false}, None ->
+            Ok (Option_without_argument name) :: scan ~specs tail)
+    | head :: tail -> 
+        Ok (Argument head) :: scan ~specs tail
+
+  let tokenize argv ~specs =
+    match List.partition_map Result.to_either (scan argv ~specs) with
+    | tokens, [] -> Ok tokens
+    | _, errors -> Error [`Tokenizer_errors (argv, errors)]
+
+  (** Pre-parsed argument vector *)
+  type options = {values: string Map.t; counts: Counter.t}
+  type t = {args: string list; options: options}
+
+  let parse argv ~specs =
+    let* tokens = tokenize argv ~specs in
+    let nil = {args=[]; options={values=Map.empty; counts=Counter.empty}} in
+    let cons token t = match token with
+      | Option_with_argument (option, argument) ->
+          let values = Map.add ~key:option ~value:argument t.options.values in
+          {t with options={t.options with values}}
+      | Option_without_argument option -> 
+          let counts = Counter.add ~key:option t.options.counts in
+          {t with options={t.options with counts}}
+      | Argument argument -> 
+          {t with args=argument :: t.args}
+    in
+    Ok (List.fold ~cons ~nil tokens)
+end
+
 module Atom = struct
   type option =
     | Long of string
     | Short of string
 
   type t =
-    (* Option of string * string option *)
+    | Option of string * string Stdlib.Option.t
     | Command of string
     | Argument of string
 
@@ -189,47 +263,51 @@ module NFA = struct
     let mem = H.mem
   end
 
-  let rec visit_transition transition log ~input ~visited =
+  let rec step_transition transition log options ~input ~visited =
     match transition, input with
     | Epsilon state, input ->
-        visit_state_log (state, log) ~input ~visited
+        step_state_log (state, log, options) ~input ~visited
     | Consume (Argument a, state), Some arg ->
         printfn "%d: %S => %S" state.id a arg;
-        Chain.singleton (state, Match.Captured (a, arg) :: log) 
+        Chain.singleton (state, Match.Captured (a, arg) :: log, options) 
     | Consume (Command c, state), Some arg when c = arg ->
         printfn "%d: %S" state.id c;
-        Chain.singleton (state, Match.Matched c :: log)
+        Chain.singleton (state, Match.Matched c :: log, options)
     | Consume (Argument _, _), None
     | Consume (Command _, _), _ ->
         Chain.empty
+    | Consume (Option (_o, None), state), input -> (* TODO *)
+        step_state_log (state, log, options) ~input ~visited
+    | Consume (Option (_o, Some _), state), input -> (* TODO *)
+        step_state_log (state, log, options) ~input ~visited
 
-  and visit_state_log ({transitions; _} as state, log) ~input ~visited =
+  and step_state_log ({transitions; _} as state, log, options) ~input ~visited =
     if Set.mem visited state then 
       Chain.empty (* Key optimisation: avoid visiting states many times *)
     else begin
       Set.add visited state;
-      if is_final state && input = None then
-        Chain.singleton (state, log)
+      if is_final state && input = None then (* condition depends on options? *)
+        Chain.singleton (state, log, options)
       else
         transitions |> Chain.concat_map (fun transition ->
-          visit_transition transition log ~input ~visited)
+          step_transition transition log options ~input ~visited)
     end
 
-  let visit_chain chain input =
+  let step_chain chain input =
     let visited = Set.create () in
-    Chain.concat_map (visit_state_log ~input ~visited) chain
+    Chain.concat_map (step_state_log ~input ~visited) chain
 
   let rec run_chain chain = function
-    | [] -> 
-        let chain = visit_chain chain None in
-        let f (state, log) = if is_final state then Some log else None in
+    | [] ->
+        let chain = step_chain chain None in
+        let f (state, log, _options) = if is_final state then Some log else None in
         Chain.find_map f chain
     | head :: tail ->
-        let chain = visit_chain chain (Some head) in
+        let chain = step_chain chain (Some head) in
         run_chain chain tail
 
-  let run nfa ~args ~defaults =
-    match run_chain (Chain.singleton (nfa, [])) args with
+  let run nfa ~argv:Argv.{args; options} ~defaults =
+    match run_chain (Chain.singleton (nfa, [], options)) args with
     | None -> printfn " e"; Error [`Match_not_found] (* TODO: better report*)
     | Some log ->
         Ok (List.fold_left (fun map -> function
@@ -287,75 +365,6 @@ module Pattern = struct
      Matching performance? *)
 end
 
-module Option = struct
-  type t = {name: string; argument: bool}
-end
-
-module Counter = struct
-  type t = int Map.t
-
-  let empty = Map.empty
-
-  let add ~key map = 
-    let count = match Map.find key map with Some x -> x | _ -> 0 in
-    Map.add map ~key ~value:(count + 1)
-end
-
-module Argv = struct
-  (* We could parse argv immediately, but tokenizing error handling easier *)
-  type token =
-    | Option_with_argument of (string * string)
-    | Option_without_argument of string
-    | Argument of string
-  
-  (* Add argv to errors? Point out error location? *)
-  let rec scan ~specs = function
-    | [] -> []
-    | "--" :: tail -> List.map (fun a -> Ok (Argument a)) tail
-    | head :: tail when starts_with "--" head -> (
-        let option, maybe_argument = String.slice_on '=' head in
-        match Map.find option specs, maybe_argument with
-        | None, _ -> Error (`Unknown_option head) :: scan ~specs tail
-        | Some Option.{name; argument=true}, Some argument ->
-            Ok (Option_with_argument (name, argument)) :: scan ~specs tail
-        | Some {name; argument=true}, None -> (
-            match tail with
-            | [] -> [Error (`Option_requires_argument name)]
-            | head :: tail when starts_with "-" head ->
-                let e = `Option_requires_argument_got (name, head) in
-                Error e :: scan ~specs tail
-            | head :: tail ->
-                Ok (Option_with_argument (name, head)) :: scan ~specs tail)
-        | Some {name; argument=false}, Some argument ->
-            let e = `Unnecessary_option_argument (name, argument) in
-            Error e :: scan ~specs tail
-        | Some {name; argument=false}, None ->
-            Ok (Option_without_argument name) :: scan ~specs tail)
-    | head :: tail -> 
-        Ok (Argument head) :: scan ~specs tail
-
-  let tokenize argv ~specs =
-    match List.partition_map Result.to_either (scan argv ~specs) with
-    | tokens, [] -> Ok tokens
-    | _, errors -> Error [`Tokenizer_errors (argv, errors)]
-
-  (** Pre-parsed argument vector *)
-  type t = {args: string list; values: string Map.t; counts: Counter.t}
-
-  let parse argv ~specs =
-    let* tokens = tokenize argv ~specs in
-    let nil = {args=[]; values=Map.empty; counts=Counter.empty} in
-    let cons token t = match token with
-      | Option_with_argument (option, argument) ->
-          {t with values=Map.add ~key:option ~value:argument t.values}
-      | Option_without_argument option -> 
-          {t with counts=Counter.add ~key:option t.counts}
-      | Argument argument -> 
-          {t with args=argument :: t.args}
-    in
-    Ok (List.fold ~cons ~nil tokens)
-end
-
 module Doc = struct
   type t = {usage: Pattern.t; options: Option.t Map.t}
 end
@@ -373,8 +382,8 @@ module Defaults = struct
     | other -> other
 
   let rec infer = function
-    | Discrete (Argument a) -> Map.singleton a (String "")
-    | Discrete (Command c) -> Map.singleton c Unit
+    | Discrete (Argument a | Option (a, Some _)) -> Map.singleton a (String "")
+    | Discrete (Command a | Option (a, None)) -> Map.singleton a Unit
     | Optional pattern -> Map.map optionalize (infer pattern)
     | Multiple pattern -> Map.map promote (infer pattern)
     | Sequence (left, right) -> 
@@ -521,8 +530,8 @@ let run
     let defaults = Defaults.infer doc.usage in
     let* () = type_check type_env defaults in
     let nfa = Pattern.compile doc.usage in
-    let* Argv.{args; _} = Argv.parse argv ~specs:doc.options in
-    let* env = NFA.run nfa ~args ~defaults in
+    let* argv = Argv.parse argv ~specs:doc.options in
+    let* env = NFA.run nfa ~argv ~defaults in
     Ok (Term.eval term ~env)
 
 (* Exports *)
