@@ -7,6 +7,13 @@ let (or) option error = match option with Some x -> Ok x | None -> Error error
 
 let (let*) = Result.bind
 
+module MutableSet = struct
+  type 'a t = ('a, unit) Hashtbl.t
+  let create (): 'a t = Hashtbl.create 64
+  let add t key = Hashtbl.add t key ()
+  let mem = Hashtbl.mem
+end
+
 module Result = struct
   include Result
   
@@ -249,20 +256,6 @@ module NFA = struct
   let final = create Chain.empty
   let is_final = function {transitions; _} -> Chain.is_empty transitions
 
-  module Set = struct (* Mutable hash set of states *)
-    module H = Hashtbl.Make (struct
-      type t = state
-      let equal {id=a; _} {id=b; _} = (a = b)
-      let hash {id; _} = Hashtbl.hash id
-    end)
-
-    type t = unit H.t
-    
-    let create () = H.create 64
-    let add t key = H.add t key ()
-    let mem = H.mem
-  end
-
   let rec step_transition transition log options ~input ~visited =
     match transition, input with
     | Epsilon state, input ->
@@ -281,20 +274,20 @@ module NFA = struct
     | Consume (Option (_o, Some _), state), input -> (* TODO *)
         step_state_log (state, log, options) ~input ~visited
 
-  and step_state_log ({transitions; _} as state, log, options) ~input ~visited =
-    if Set.mem visited state then 
+  and step_state_log (state, log, options) ~input ~visited =
+    if MutableSet.mem visited state.id then 
       Chain.empty (* Key optimisation: avoid visiting states many times *)
     else begin
-      Set.add visited state;
+      MutableSet.add visited state.id;
       if is_final state && input = None then (* condition depends on options? *)
         Chain.singleton (state, log, options)
       else
-        transitions |> Chain.concat_map (fun transition ->
+        state.transitions |> Chain.concat_map (fun transition ->
           step_transition transition log options ~input ~visited)
     end
 
   let step_chain chain input =
-    let visited = Set.create () in
+    let visited = MutableSet.create () in
     Chain.concat_map (step_state_log ~input ~visited) chain
 
   let rec run_chain chain = function
