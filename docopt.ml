@@ -139,14 +139,36 @@ module Map = struct
     List.fold ~cons ~nil:empty list
 end
 
-module Counter = struct
+module Multiset = struct
   type t = int Map.t
 
   let empty = Map.empty
 
-  let add ~key map = 
+  let push ~key map = 
     let count = match Map.find key map with Some x -> x | _ -> 0 in
     Map.add map ~key ~value:(count + 1)
+
+  let pop ~key map =
+    match Map.find key map with
+    | Some count when count >= 0 -> Some (Map.add ~key ~value:(count - 1) map)
+    | Some 0 -> None
+    | Some count -> failwithf "Negative count should never happen: %d" count
+    | None -> failwithf "Weird, the key %S was never added to the multiset" key
+end
+
+module Multimap = struct
+  type 'a t = 'a list Map.t
+  let empty = Map.empty
+
+  let push ~key ~value map =
+    let f = function Some list -> Some (value :: list) | _ -> Some [value] in
+    Map.update key f map
+
+  let pop ~key map =
+    match Map.find key map with
+    | Some (head :: tail) -> Some head, Map.add ~key ~value:tail map
+    | Some [] -> None, Map.remove key map
+    | None -> failwithf "Weird, the key %S was never added to the multimap" key
 end
 
 (* * *)
@@ -194,21 +216,21 @@ module Argv = struct
     | _, errors -> Error [`Tokenizer_errors (argv, errors)]
 
   (** Pre-parsed argument vector *)
-  type options = {values: string Map.t; counts: Counter.t}
-  type t = {args: string list; options: options}
+  type options = {values: string list Map.t; counts: Multiset.t}
+  type t = {arguments: string list; options: options}
 
   let parse argv ~specs =
     let* tokens = tokenize argv ~specs in
-    let nil = {args=[]; options={values=Map.empty; counts=Counter.empty}} in
-    let cons token t = match token with
+    let nil = {arguments=[]; options={values=Map.empty; counts=Multiset.empty}} in
+    let cons token {arguments; options={values; counts}} = match token with
       | Option_with_argument (option, argument) ->
-          let values = Map.add ~key:option ~value:argument t.options.values in
-          {t with options={t.options with values}}
+          let values = Multimap.push ~key:option ~value:argument values in
+          {arguments; options={values; counts}}
       | Option_without_argument option -> 
-          let counts = Counter.add ~key:option t.options.counts in
-          {t with options={t.options with counts}}
+          let counts = Multiset.push ~key:option counts in
+          {arguments; options={values; counts}}
       | Argument argument -> 
-          {t with args=argument :: t.args}
+          {arguments=argument :: arguments; options={values; counts}}
     in
     Ok (List.fold ~cons ~nil tokens)
 end
@@ -299,8 +321,8 @@ module NFA = struct
         let chain = step_chain chain (Some head) in
         run_chain chain tail
 
-  let run nfa ~argv:Argv.{args; options} ~defaults =
-    match run_chain (Chain.singleton (nfa, [], options)) args with
+  let run nfa ~argv:Argv.{arguments; options} ~defaults =
+    match run_chain (Chain.singleton (nfa, [], options)) arguments with
     | None -> printfn " e"; Error [`Match_not_found] (* TODO: better report*)
     | Some log ->
         Ok (List.fold_left (fun map -> function
