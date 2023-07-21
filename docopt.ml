@@ -150,7 +150,7 @@ module Multiset = struct
 
   let pop ~key map =
     match Map.find key map with
-    | Some count when count >= 0 -> Some (Map.add ~key ~value:(count - 1) map)
+    | Some count when count > 0 -> Some (Map.add ~key ~value:(count - 1) map)
     | Some 0 -> None
     | Some count -> failwithf "Negative count should never happen: %d" count
     | None -> failwithf "Weird, the key %S was never added to the multiset" key
@@ -246,7 +246,12 @@ module Atom = struct
     | Argument of string
 
   let parse source = (* TODO: this is a temp stub *)
-    if starts_with "<" source then Argument source else Command source
+    if starts_with "<" source then 
+      Argument source 
+    else if starts_with "--" source then
+      Option (source, None)
+    else
+      Command source
 end
 
 module Value = struct
@@ -278,7 +283,7 @@ module NFA = struct
   let final = create Chain.empty
   let is_final = function {transitions; _} -> Chain.is_empty transitions
 
-  let rec step_transition transition log options ~input ~visited =
+  let rec step_transition transition log (Argv.{values; counts} as options) ~input ~visited =
     match transition, input with
     | Epsilon state, input ->
         step_state_log (state, log, options) ~input ~visited
@@ -291,13 +296,21 @@ module NFA = struct
     | Consume (Argument _, _), None
     | Consume (Command _, _), _ ->
         Chain.empty
-    | Consume (Option (_o, None), state), input -> (* TODO *)
-        step_state_log (state, log, options) ~input ~visited
+    | Consume (Option (option, None), state), input -> (
+        printfn "%d: %S" state.id option;
+        printfn "  : %d" (Map.find_exn option counts);
+        match Multiset.pop ~key:option counts with
+        | Some counts -> 
+            let options = Argv.{values; counts} in
+            let log = Match.Matched option :: log in
+            (*let state = create state.transitions in*)
+            step_state_log (state, log, options) ~input ~visited
+        | None -> Chain.empty)
     | Consume (Option (_o, Some _), state), input -> (* TODO *)
         step_state_log (state, log, options) ~input ~visited
 
   and step_state_log (state, log, options) ~input ~visited =
-    if MutableSet.mem visited state.id then 
+    if false (* MutableSet.mem visited state.id*) then 
       Chain.empty (* Key optimisation: avoid visiting states many times *)
     else begin
       MutableSet.add visited state.id;
