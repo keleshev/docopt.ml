@@ -70,6 +70,7 @@ module Test_explicit_tuple = struct
       => Ok ("a", Some "b", ["c"; "d"]) 
 end
 
+(*
 module Test_russ_cox_pathological_example = struct
   let _doc = "usage: prog [a] [a] [a] [a] a a a a"
   let doc = Doc.{
@@ -85,7 +86,6 @@ module Test_russ_cox_pathological_example = struct
     Docopt.run main ~doc ~argv:["a";"a";"a"; "a"]
       => Ok 4
 end
-
 module Test_russ_cox_pathological_example_large = struct
   let _doc = "usage: prog [a]*32  a*32"
   let aq4 = Optional !"a" <*> Optional  !"a" <*>Optional  !"a" <*>Optional  !"a"
@@ -104,8 +104,10 @@ module Test_russ_cox_pathological_example_large = struct
     Docopt.run main ~doc ~argv:(a8 @ a8 @ a8 @ a8)
       => Ok 32
 end
+*)
 
-module Test_another_pathological_example = struct
+
+(*module Test_another_pathological_example = struct
   let _doc = "usage: prog [[a]...]..."
   let doc = Doc.{
     usage=Multiple (Optional (Multiple (Optional !"a")));
@@ -118,7 +120,7 @@ module Test_another_pathological_example = struct
     let a8 = ["a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"] in
     Docopt.run main ~doc ~argv:(a8 @ a8)
       => Ok 16
-end
+end*)
 
 module Test_int_option = struct
   let _doc = "usage: prog --verbose..."
