@@ -70,7 +70,6 @@ module Test_explicit_tuple = struct
       => Ok ("a", Some "b", ["c"; "d"]) 
 end
 
-(*
 module Test_russ_cox_pathological_example = struct
   let _doc = "usage: prog [a] [a] [a] [a] a a a a"
   let doc = Doc.{
@@ -86,6 +85,7 @@ module Test_russ_cox_pathological_example = struct
     Docopt.run main ~doc ~argv:["a";"a";"a"; "a"]
       => Ok 4
 end
+
 module Test_russ_cox_pathological_example_large = struct
   let _doc = "usage: prog [a]*32  a*32"
   let aq4 = Optional !"a" <*> Optional  !"a" <*>Optional  !"a" <*>Optional  !"a"
@@ -104,10 +104,8 @@ module Test_russ_cox_pathological_example_large = struct
     Docopt.run main ~doc ~argv:(a8 @ a8 @ a8 @ a8)
       => Ok 32
 end
-*)
 
-
-(*module Test_another_pathological_example = struct
+module Test_another_russ_cox_pathological_example_potential_infinite_loop = struct
   let _doc = "usage: prog [[a]...]..."
   let doc = Doc.{
     usage=Multiple (Optional (Multiple (Optional !"a")));
@@ -120,7 +118,7 @@ end
     let a8 = ["a"; "a"; "a"; "a"; "a"; "a"; "a"; "a"] in
     Docopt.run main ~doc ~argv:(a8 @ a8)
       => Ok 16
-end*)
+end
 
 module Test_int_option = struct
   let _doc = "usage: prog --verbose..."
@@ -152,4 +150,47 @@ module Test_int_option_2 = struct
   let () = 
     Docopt.run main ~doc ~argv:["--verbose"; "--verbose"] (*; "--verbose"]*)
       => Ok 2
+end
+
+module Test_russ_cox_pathological_example_with_options = struct
+  let _doc = "usage: prog [--verbose]*32 --verbose*32"
+
+  let vo, v = Optional !"--verbose", !"--verbose"
+  let vo8 = vo <*> vo <*> vo <*> vo <*> vo <*> vo <*> vo <*> vo 
+  let v8 = v <*> v <*> v <*> v <*> v <*> v <*> v <*> v 
+  let vo32 = vo8 <*> vo8 <*> vo8 <*> vo8
+  let v32 = v8 <*> v8 <*> v8 <*> v8
+  let doc = Doc.{
+    usage=vo32 <*> v32;
+    options=Map.of_list [
+      "--verbose", Docopt.Option.{name="--verbose"; argument=false}; 
+    ];
+  }
+  let main = Docopt.(get int "--verbose")
+
+  let () = 
+    let v = "--verbose" in
+    let v8 = [v; v; v; v; v; v; v; v] in
+    let argv = v8 @ v8 @ v8 @ v8 in
+    Docopt.run main ~doc ~argv
+      => Ok 32
+end
+
+module Testing_potential_infinite_loop_with_options = struct
+  let _doc = "usage: prog [[--verbose]...]..."
+
+  let doc = Doc.{
+    usage=Multiple (Optional (Multiple (Optional !"--verbose")));
+    options=Map.of_list [
+      "--verbose", Docopt.Option.{name="--verbose"; argument=false}; 
+    ];
+  }
+  let main = Docopt.(get int "--verbose")
+
+  let () = 
+    let v = "--verbose" in
+    let v8 = [v; v; v; v; v; v; v; v] in
+    let argv = v8 @ v8 @ v8 @ v8 in
+    Docopt.run main ~doc ~argv
+      => Ok 32
 end

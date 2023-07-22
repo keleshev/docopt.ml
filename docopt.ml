@@ -310,10 +310,10 @@ module NFA = struct
         step_state_log (state, log, options) ~input ~visited
 
   and step_state_log (state, log, options) ~input ~visited =
-    if false (* MutableSet.mem visited state.id*) then 
+    if MutableSet.mem visited (state.id, log) then 
       Chain.empty (* Key optimisation: avoid visiting states many times *)
     else begin
-      MutableSet.add visited state.id;
+      MutableSet.add visited (state.id, log);
       if is_final state && input = None then (* condition depends on options? *)
         Chain.singleton (state, log, options)
       else
@@ -323,7 +323,9 @@ module NFA = struct
 
   let step_chain chain input =
     let visited = MutableSet.create () in
-    Chain.concat_map (step_state_log ~input ~visited) chain
+    let x = Chain.concat_map (step_state_log ~input ~visited) chain in
+    printfn "(%d, %d)" (Hashtbl.length visited) (Gc.get_minor_free ());
+    x
 
   let rec run_chain chain = function
     | [] ->
