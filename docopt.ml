@@ -1,6 +1,6 @@
 let sprintf = Printf.sprintf
 let failwithf x = Printf.ksprintf failwith x
-let debug = false
+let debug = true
 let printfn x = Printf.ksprintf (if debug then print_endline else (fun _ -> ())) x
 let starts_with prefix string = String.starts_with ~prefix string
 let (or) option error = match option with Some x -> Ok x | None -> Error error
@@ -283,10 +283,10 @@ module NFA = struct
   let final = create Chain.empty
   let is_final = function {transitions; _} -> Chain.is_empty transitions
 
-  let rec step_transition transition log (Argv.{values; counts} as options) ~input ~visited =
+  let rec step_transition transition log (Argv.{values; counts} as options) ~input ~n ~visited =
     match transition, input with
     | Epsilon state, input ->
-        step_state_log (state, log, options) ~input ~visited
+        step_state_log (state, log, options) ~input ~n ~visited
     | Consume (Argument a, state), Some arg ->
         printfn "%d: %S => %S" state.id a arg;
         Chain.singleton (state, Match.Captured (a, arg) :: log, options) 
@@ -304,40 +304,43 @@ module NFA = struct
             let options = Argv.{values; counts} in
             let log = Match.Matched option :: log in
             (*let state = create state.transitions in*)
-            step_state_log (state, log, options) ~input ~visited
+            step_state_log (state, log, options) ~input ~n ~visited
         | None -> Chain.empty)
     | Consume (Option (_o, Some _), state), input -> (* TODO *)
-        step_state_log (state, log, options) ~input ~visited
+        step_state_log (state, log, options) ~input ~n ~visited
 
-  and step_state_log (state, log, options) ~input ~visited =
-    if false (* MutableSet.mem visited state.id*) then 
+  and step_state_log (state, log, options) ~input ~n ~visited =
+    if MutableSet.mem visited (state.id, n) then 
       Chain.empty (* Key optimisation: avoid visiting states many times *)
     else begin
-      MutableSet.add visited state.id;
+      MutableSet.add visited (state.id, n);
       if is_final state && input = None then (* condition depends on options? *)
         Chain.singleton (state, log, options)
       else
         state.transitions |> Chain.concat_map (fun transition ->
-          step_transition transition log options ~input ~visited)
+          step_transition transition log options ~input ~n ~visited)
     end
 
-  let step_chain chain input =
-    let visited = MutableSet.create () in
-    Chain.concat_map (step_state_log ~input ~visited) chain
+  let step_chain chain input ~n ~visited =
+    (*let visited = MutableSet.create () in*)
+    Chain.concat_map (step_state_log ~input ~n ~visited) chain
 
-  let rec run_chain chain = function
+  let rec run_chain chain args ~n ~visited =
+    match args with
     | [] ->
-        let chain = step_chain chain None in
+        let chain = step_chain chain None ~n ~visited in
         let f (state, log, _options) = if is_final state then Some log else None in
         Chain.find_map f chain
     | head :: tail ->
-        let chain = step_chain chain (Some head) in
-        run_chain chain tail
+        let chain = step_chain chain (Some head) ~n ~visited in
+        run_chain chain tail ~n:(n + 1) ~visited
 
   let run nfa ~argv:Argv.{arguments; options} ~defaults =
-    match run_chain (Chain.singleton (nfa, [], options)) arguments with
+    let visited = MutableSet.create () in
+    match run_chain (Chain.singleton (nfa, [], options)) arguments ~n:0 ~visited with
     | None -> printfn " e"; Error [`Match_not_found] (* TODO: better report*)
     | Some log ->
+        printfn "visited: %d" (Hashtbl.length visited);
         Ok (List.fold_left (fun map -> function
           | Match.Captured (atom, value) ->
               printfn "Captured (%S, %S)" atom value;
