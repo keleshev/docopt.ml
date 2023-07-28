@@ -2,8 +2,6 @@ let sprintf = Printf.sprintf
 let failwithf x = Printf.ksprintf failwith x
 let debug = false
 let printfn x = Printf.ksprintf (if debug then print_endline else (fun _ -> ())) x
-let starts_with prefix string = String.starts_with ~prefix string
-let (or) option error = match option with Some x -> Ok x | None -> Error error
 
 let (let*) = Result.bind
 
@@ -130,9 +128,7 @@ module Map = struct
       | Some x -> Some (f x) 
       | None -> failwithf "invalid key %S" key)
 
-  let find_exn = find
-  let find = find_opt
-
+  let find_exn, find = find, find_opt
 
   let of_list list =
     let cons (key, value) map = add ~key ~value map in
@@ -164,8 +160,8 @@ module Multimap = struct
 
   let pop ~key map =
     match Map.find key map with
-    | Some (head :: tail) -> Some head, Map.add ~key ~value:tail map
-    | Some [] | None -> None, Map.remove key map
+    | Some (head :: tail) -> Some (head, Map.add ~key ~value:tail map)
+    | Some [] | None -> None
 end
 
 (* * *)
@@ -185,7 +181,7 @@ module Argv = struct
   let rec scan ~specs = function
     | [] -> []
     | "--" :: tail -> List.map (fun a -> Ok (Argument a)) tail
-    | head :: tail when starts_with "--" head -> (
+    | head :: tail when String.starts_with ~prefix:"--" head -> (
         let option, maybe_argument = String.slice_on '=' head in
         match Map.find option specs, maybe_argument with
         | None, _ -> Error (`Unknown_option head) :: scan ~specs tail
@@ -194,7 +190,7 @@ module Argv = struct
         | Some {name; argument=true}, None -> (
             match tail with
             | [] -> [Error (`Option_requires_argument name)]
-            | head :: tail when starts_with "-" head ->
+            | head :: tail when String.starts_with ~prefix:"-" head ->
                 let e = `Option_requires_argument_got (name, head) in
                 Error e :: scan ~specs tail
             | head :: tail ->
@@ -243,9 +239,9 @@ module Atom = struct
     | Argument of string
 
   let parse source = (* TODO: this is a temp stub *)
-    if starts_with "<" source then 
+    if String.starts_with ~prefix:"<" source then 
       Argument source 
-    else if starts_with "--" source then
+    else if String.starts_with ~prefix:"--" source then
       let option, argument = String.slice_on '=' source in
       Option (option, argument)
     else
@@ -303,11 +299,11 @@ module NFA = struct
         | None -> Chain.empty)
     | Consume (Option (option, Some _), state), input -> (
         match Multimap.pop ~key:option values with
-        | Some value, values ->
+        | Some (value, values) ->
             let options = Argv.{values; counts} in
             let log = Match.Captured (option, value) :: log in
             step_state_log (state, log, options) ~input ~visited
-        | None, _ -> Chain.empty)
+        | None -> Chain.empty)
       
 
   and step_state_log (state, log, options) ~input ~visited =
@@ -339,7 +335,7 @@ module NFA = struct
 
   let run nfa ~argv:Argv.{arguments; options} ~defaults =
     match run_chain (Chain.singleton (nfa, [], options)) arguments with
-    | None -> printfn " e"; Error [`Match_not_found] (* TODO: better report*)
+    | None -> printfn " e"; Error [`Match_not_found] (* TODO: better report *)
     | Some log ->
         Ok (List.fold_left (fun map -> function
           | Match.Captured (atom, value) ->

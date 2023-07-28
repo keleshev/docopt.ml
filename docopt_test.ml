@@ -246,7 +246,7 @@ module Test_option_string_option_list = struct
     s, o, l
 
   let () =
-    let argv = ["--string=s"; "--option=o"; "--list=l"; "--list=m"] in
+    let argv = ["--string=s"; "--option=o"; "--list=l"; "--list"; "m"] in
     Docopt.run main ~doc ~argv
       => Ok ("s", Some "o", ["l"; "m"]) 
 
