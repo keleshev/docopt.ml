@@ -151,9 +151,7 @@ module Multiset = struct
   let pop ~key map =
     match Map.find key map with
     | Some count when count > 0 -> Some (Map.add ~key ~value:(count - 1) map)
-    | Some 0 -> None
-    | Some count -> failwithf "Negative count should never happen: %d" count
-    | None -> failwithf "Weird, the key %S was never added to the multiset" key
+    | Some _ | None -> None
 end
 
 module Multimap = struct
@@ -167,8 +165,7 @@ module Multimap = struct
   let pop ~key map =
     match Map.find key map with
     | Some (head :: tail) -> Some head, Map.add ~key ~value:tail map
-    | Some [] -> None, Map.remove key map
-    | None -> failwithf "Weird, the key %S was never added to the multimap" key
+    | Some [] | None -> None, Map.remove key map
 end
 
 (* * *)
@@ -249,7 +246,8 @@ module Atom = struct
     if starts_with "<" source then 
       Argument source 
     else if starts_with "--" source then
-      Option (source, None)
+      let option, argument = String.slice_on '=' source in
+      Option (option, argument)
     else
       Command source
 end
@@ -297,17 +295,20 @@ module NFA = struct
     | Consume (Command _, _), _ ->
         Chain.empty
     | Consume (Option (option, None), state), input -> (
-        printfn "%d: %S" state.id option;
-        printfn "  : %d" (Map.find_exn option counts);
         match Multiset.pop ~key:option counts with
         | Some counts -> 
             let options = Argv.{values; counts} in
             let log = Match.Matched option :: log in
-            (*let state = create state.transitions in*)
             step_state_log (state, log, options) ~input ~visited
         | None -> Chain.empty)
-    | Consume (Option (_o, Some _), state), input -> (* TODO *)
-        step_state_log (state, log, options) ~input ~visited
+    | Consume (Option (option, Some _), state), input -> (
+        match Multimap.pop ~key:option values with
+        | Some value, values ->
+            let options = Argv.{values; counts} in
+            let log = Match.Captured (option, value) :: log in
+            step_state_log (state, log, options) ~input ~visited
+        | None, _ -> Chain.empty)
+      
 
   and step_state_log (state, log, options) ~input ~visited =
     if MutableSet.mem visited (state.id, log) then 

@@ -194,3 +194,63 @@ module Testing_potential_infinite_loop_with_options = struct
     Docopt.run main ~doc ~argv
       => Ok 32
 end
+
+module Test_option_unit_bool_int = struct
+  let _doc = "usage: prog --unit [--bool] --int..."
+  let doc = Doc.{
+    usage= !"--unit" <*> Optional !"--bool" <*> Multiple !"--int";
+    options=Map.of_list [
+      "--unit", Docopt.Option.{name="--unit"; argument=false}; 
+      "--bool", Docopt.Option.{name="--bool"; argument=false}; 
+      "--int", Docopt.Option.{name="--int"; argument=false}; 
+    ];
+  }
+
+  let main =
+    let open Docopt in
+    let+ () = get unit "--unit"
+    and+ bool = get bool "--bool"
+    and+ int = get int "--int" in
+    bool, int
+
+  let () =
+    match Docopt.run main ~doc ~argv:[] with
+    | Error _ -> ()
+    | Ok _ -> assert false
+
+  let () =
+    Docopt.run main ~doc ~argv:["--unit"; "--bool"; "--int"; "--int"]
+      => Ok (true, 2) 
+
+  let () =
+    Docopt.run main ~doc ~argv:["--unit"; "--int"]
+      => Ok (false, 1)
+end
+
+module Test_option_string_option_list = struct
+  let _doc = "usage: prog --string=<s> [--option=<o>] --list=<l>..."
+  let doc = Doc.{
+    usage= !"--string=<s>" <*> Optional !"--option=<o>" <*> Multiple !"--list=<l>";
+    options=Map.of_list [
+      "--string", Docopt.Option.{name="--string"; argument=true}; 
+      "--option", Docopt.Option.{name="--option"; argument=true}; 
+      "--list", Docopt.Option.{name="--list"; argument=true}; 
+    ];
+  }
+
+  let main =
+    let open Docopt in
+    let+ s = get string "--string"
+    and+ o = get (option string) "--option"
+    and+ l = get (list string) "--list" in
+    s, o, l
+
+  let () =
+    let argv = ["--string=s"; "--option=o"; "--list=l"; "--list=m"] in
+    Docopt.run main ~doc ~argv
+      => Ok ("s", Some "o", ["l"; "m"]) 
+
+  let () =
+    Docopt.run main ~doc ~argv:["--string=s"; "--list=l"]
+      => Ok ("s", None, ["l"]) 
+end
