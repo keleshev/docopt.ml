@@ -5,6 +5,8 @@ module Doc = Docopt.Doc
 module Map = Docopt.Map
 let (<*>) l r = Sequence (l, r)
 let (!) source = Discrete (Docopt.Atom.parse source)
+let option ?(argument=false) ?(synonyms=[]) canonical =
+   canonical, Docopt.Option.{canonical; argument; synonyms}
 
 module Test_unit_bool_int = struct
   let _doc = "usage: prog unit [bool] int..."
@@ -124,9 +126,7 @@ module Test_int_option = struct
   let _doc = "usage: prog --verbose..."
   let doc = Doc.{
     usage=Multiple !"--verbose";
-    options=Map.of_list [
-      "--verbose", Docopt.Option.{canonical="--verbose"; argument=false}; 
-    ];
+    options=Map.of_list [option "--verbose"];
   }
 
   let main = Docopt.(get int "--verbose")
@@ -140,9 +140,7 @@ module Test_int_option_2 = struct
   let _doc = "usage: prog [--verbose] [--verbose]"
   let doc = Doc.{
     usage= Optional (!"--verbose" <*> !"--verbose");
-    options=Map.of_list [
-      "--verbose", Docopt.Option.{canonical="--verbose"; argument=false}; 
-    ];
+    options=Map.of_list [option "--verbose"];
   }
 
   let main = Docopt.(get int "--verbose")
@@ -162,9 +160,7 @@ module Test_russ_cox_pathological_example_with_options = struct
   let v32 = v8 <*> v8 <*> v8 <*> v8
   let doc = Doc.{
     usage=vo32 <*> v32;
-    options=Map.of_list [
-      "--verbose", Docopt.Option.{canonical="--verbose"; argument=false}; 
-    ];
+    options=Map.of_list [option "--verbose"];
   }
   let main = Docopt.(get int "--verbose")
 
@@ -181,9 +177,7 @@ module Testing_potential_infinite_loop_with_options = struct
 
   let doc = Doc.{
     usage=Multiple (Optional (Multiple (Optional !"--verbose")));
-    options=Map.of_list [
-      "--verbose", Docopt.Option.{canonical="--verbose"; argument=false}; 
-    ];
+    options=Map.of_list [option "--verbose"];
   }
   let main = Docopt.(get int "--verbose")
 
@@ -200,9 +194,7 @@ module Test_option_unit_bool_int = struct
   let doc = Doc.{
     usage= !"--unit" <*> Optional !"--bool" <*> Multiple !"--int";
     options=Map.of_list [
-      "--unit", Docopt.Option.{canonical="--unit"; argument=false}; 
-      "--bool", Docopt.Option.{canonical="--bool"; argument=false}; 
-      "--int", Docopt.Option.{canonical="--int"; argument=false}; 
+      option "--unit"; option "--bool"; option "--int";
     ];
   }
 
@@ -232,9 +224,9 @@ module Test_option_string_option_list = struct
   let doc = Doc.{
     usage= !"--string=<s>" <*> Optional !"--option=<o>" <*> Multiple !"--list=<l>";
     options=Map.of_list [
-      "--string", Docopt.Option.{canonical="--string"; argument=true}; 
-      "--option", Docopt.Option.{canonical="--option"; argument=true}; 
-      "--list", Docopt.Option.{canonical="--list"; argument=true}; 
+      option "--string" ~argument:true; 
+      option "--option" ~argument:true; 
+      option "--list" ~argument:true;
     ];
   }
 

@@ -167,7 +167,7 @@ end
 (* * *)
 
 module Option = struct
-  type t = {canonical: string; argument: bool}
+  type t = {canonical: string; synonyms: string list; argument: bool}
 end
 
 module Argv = struct
@@ -186,9 +186,9 @@ module Argv = struct
         (* TODO include non-canonical name in errors too *)
         match Map.find option specs, maybe_argument with
         | None, _ -> Error (`Unknown_option head) :: scan ~specs tail
-        | Some Option.{canonical; argument=true}, Some argument ->
+        | Some Option.{canonical; argument=true; _}, Some argument ->
             Ok (Option_with_argument (canonical, argument)) :: scan ~specs tail
-        | Some {canonical; argument=true}, None -> (
+        | Some {canonical; argument=true; _}, None -> (
             match tail with
             | [] -> [Error (`Option_requires_argument canonical)]
             | head :: tail when String.starts_with ~prefix:"-" head ->
@@ -196,10 +196,10 @@ module Argv = struct
                 Error e :: scan ~specs tail
             | head :: tail ->
                 Ok (Option_with_argument (canonical, head)) :: scan ~specs tail)
-        | Some {canonical; argument=false}, Some argument ->
+        | Some {canonical; argument=false; _}, Some argument ->
             let e = `Unnecessary_option_argument (canonical, argument) in
             Error e :: scan ~specs tail
-        | Some {canonical; argument=false}, None ->
+        | Some {canonical; argument=false; _}, None ->
             Ok (Option_without_argument canonical) :: scan ~specs tail)
     | head :: tail -> 
         Ok (Argument head) :: scan ~specs tail
