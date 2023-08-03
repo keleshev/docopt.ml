@@ -167,7 +167,7 @@ end
 (* * *)
 
 module Option = struct
-  type t = {name: string; argument: bool}
+  type t = {canonical: string; argument: bool}
 end
 
 module Argv = struct
@@ -183,23 +183,24 @@ module Argv = struct
     | "--" :: tail -> List.map (fun a -> Ok (Argument a)) tail
     | head :: tail when String.starts_with ~prefix:"--" head -> (
         let option, maybe_argument = String.slice_on '=' head in
+        (* TODO include non-canonical name in errors too *)
         match Map.find option specs, maybe_argument with
         | None, _ -> Error (`Unknown_option head) :: scan ~specs tail
-        | Some Option.{name; argument=true}, Some argument ->
-            Ok (Option_with_argument (name, argument)) :: scan ~specs tail
-        | Some {name; argument=true}, None -> (
+        | Some Option.{canonical; argument=true}, Some argument ->
+            Ok (Option_with_argument (canonical, argument)) :: scan ~specs tail
+        | Some {canonical; argument=true}, None -> (
             match tail with
-            | [] -> [Error (`Option_requires_argument name)]
+            | [] -> [Error (`Option_requires_argument canonical)]
             | head :: tail when String.starts_with ~prefix:"-" head ->
-                let e = `Option_requires_argument_got (name, head) in
+                let e = `Option_requires_argument_got (canonical, head) in
                 Error e :: scan ~specs tail
             | head :: tail ->
-                Ok (Option_with_argument (name, head)) :: scan ~specs tail)
-        | Some {name; argument=false}, Some argument ->
-            let e = `Unnecessary_option_argument (name, argument) in
+                Ok (Option_with_argument (canonical, head)) :: scan ~specs tail)
+        | Some {canonical; argument=false}, Some argument ->
+            let e = `Unnecessary_option_argument (canonical, argument) in
             Error e :: scan ~specs tail
-        | Some {name; argument=false}, None ->
-            Ok (Option_without_argument name) :: scan ~specs tail)
+        | Some {canonical; argument=false}, None ->
+            Ok (Option_without_argument canonical) :: scan ~specs tail)
     | head :: tail -> 
         Ok (Argument head) :: scan ~specs tail
 
@@ -536,16 +537,16 @@ end
 let type_check type_env value_env =
   let errors = Map.fold (fun atom types errors ->
     Set.fold (fun dynamic_type errors ->
-       match Map.find atom value_env with
-       | None ->
-           let error = atom, Type.Dynamic.to_string dynamic_type, Map.keys value_env in
-           `Atom_not_found error :: errors
-       | Some default ->
-           if Type.Dynamic.is_compatible default dynamic_type then
-             errors
-           else
-             let error = atom, Type.Dynamic.to_string dynamic_type, default in
-             `Type_error error :: errors
+      match Map.find atom value_env with
+      | None ->
+          let error = atom, Type.Dynamic.to_string dynamic_type, Map.keys value_env in
+          `Atom_not_found error :: errors
+      | Some default ->
+          if Type.Dynamic.is_compatible default dynamic_type then
+            errors
+          else
+            let error = atom, Type.Dynamic.to_string dynamic_type, default in
+            `Type_error error :: errors
     ) types errors
   ) type_env [] in
   if errors = [] then Ok () else Error errors
@@ -553,10 +554,12 @@ let type_check type_env value_env =
 let run
   : type a. argv:string list -> doc:Doc.t -> a Term.t -> (a, _) result 
   = fun ~argv ~doc term ->
+    (* Static part *)
     let type_env = Term.infer term in
     let defaults = Defaults.infer doc.usage in
     let* () = type_check type_env defaults in
     let nfa = Pattern.compile doc.usage in
+    (* Dynamic part *)
     let* argv = Argv.parse argv ~specs:doc.options in
     let* env = NFA.run nfa ~argv ~defaults in
     Ok (Term.eval term ~env)
