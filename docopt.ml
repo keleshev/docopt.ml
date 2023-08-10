@@ -173,7 +173,7 @@ end
 module Argv = struct
   (* We could parse argv directly, but tokenizing makes error handling easier *)
   type token =
-    | Option_with_argument of (string * string)
+    | Option_with_argument of string * string
     | Option_without_argument of string
     | Argument of string
   
@@ -210,7 +210,7 @@ module Argv = struct
     | _, errors -> Error [`Tokenizer_errors (argv, errors)]
 
   (** Pre-parsed argument vector *)
-  type options = {values: string list Map.t; counts: Multiset.t}
+  type options = {values: string Multimap.t; counts: Multiset.t}
   type t = {arguments: string list; options: options}
 
   let parse argv ~specs =
