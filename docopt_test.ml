@@ -4,7 +4,7 @@ open Docopt.Pattern
 module Doc = Docopt.Doc
 module Map = Docopt.Map
 let (<*>) l r = Sequence (l, r)
-let (!) source = Discrete (Docopt.Atom.parse source)
+let (!) source = Discrete (Docopt.Atom.of_string_unchecked source)
 let option ?(argument=false) ?(synonyms=[]) canonical =
    canonical, Docopt.Option.{canonical; argument; synonyms}
 

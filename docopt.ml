@@ -135,7 +135,7 @@ module Map = struct
     List.fold ~cons ~nil:empty list
 end
 
-module Multiset = struct
+module MultiSet = struct
   type t = int Map.t
 
   let empty = Map.empty
@@ -150,7 +150,7 @@ module Multiset = struct
     | Some _ | None -> None
 end
 
-module Multimap = struct
+module MultiMap = struct
   type 'a t = 'a list Map.t
   let empty = Map.empty
 
@@ -210,18 +210,18 @@ module Argv = struct
     | _, errors -> Error [`Tokenizer_errors (argv, errors)]
 
   (** Pre-parsed argument vector *)
-  type options = {values: string Multimap.t; counts: Multiset.t}
+  type options = {values: string MultiMap.t; counts: MultiSet.t}
   type t = {arguments: string list; options: options}
 
   let parse argv ~specs =
     let* tokens = tokenize argv ~specs in
-    let nil = {arguments=[]; options={values=Map.empty; counts=Multiset.empty}} in
+    let nil = {arguments=[]; options={values=Map.empty; counts=MultiSet.empty}} in
     let cons token {arguments; options={values; counts}} = match token with
       | Option_with_argument (option, argument) ->
-          let values = Multimap.push ~key:option ~value:argument values in
+          let values = MultiMap.push ~key:option ~value:argument values in
           {arguments; options={values; counts}}
       | Option_without_argument option -> 
-          let counts = Multiset.push ~key:option counts in
+          let counts = MultiSet.push ~key:option counts in
           {arguments; options={values; counts}}
       | Argument argument -> 
           {arguments=argument :: arguments; options={values; counts}}
@@ -239,7 +239,7 @@ module Atom = struct
     | Command of string
     | Argument of string
 
-  let parse source = (* TODO: this is a temp stub *)
+  let of_string_unchecked source =
     if String.starts_with ~prefix:"<" source then 
       Argument source 
     else if String.starts_with ~prefix:"--" source then
@@ -292,21 +292,20 @@ module NFA = struct
     | Consume (Command _, _), _ ->
         Chain.empty
     | Consume (Option (option, None), state), input -> (
-        match Multiset.pop ~key:option counts with
+        match MultiSet.pop ~key:option counts with
         | Some counts -> 
             let options = Argv.{values; counts} in
             let log = Match.Matched option :: log in
             step_state_log (state, log, options) ~input ~visited
         | None -> Chain.empty)
     | Consume (Option (option, Some _), state), input -> (
-        match Multimap.pop ~key:option values with
+        match MultiMap.pop ~key:option values with
         | Some (value, values) ->
             let options = Argv.{values; counts} in
             let log = Match.Captured (option, value) :: log in
             step_state_log (state, log, options) ~input ~visited
         | None -> Chain.empty)
       
-
   and step_state_log (state, log, options) ~input ~visited =
     if MutableSet.mem visited (state.id, log) then 
       Chain.empty (* Key optimisation: avoid visiting states many times *)
