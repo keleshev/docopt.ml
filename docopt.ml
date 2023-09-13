@@ -261,8 +261,8 @@ end
 
 module Match = struct
   type t =
-    | Captured of string * string
-    | Matched of string
+    | Capture of string * string (* Positional and optional arguments *)
+    | Exact of string (* Commands and options without arguments *)
 end
 
 module NFA = struct
@@ -284,10 +284,10 @@ module NFA = struct
         step_state_log (state, log, options) ~input ~visited
     | Consume (Argument a, state), Some arg ->
         printfn "%d: %S => %S" state.id a arg;
-        Chain.singleton (state, Match.Captured (a, arg) :: log, options)
+        Chain.singleton (state, Match.Capture (a, arg) :: log, options)
     | Consume (Command c, state), Some arg when c = arg ->
         printfn "%d: %S" state.id c;
-        Chain.singleton (state, Match.Matched c :: log, options)
+        Chain.singleton (state, Match.Exact c :: log, options)
     | Consume (Argument _, _), None
     | Consume (Command _, _), _ ->
         Chain.empty
@@ -295,14 +295,14 @@ module NFA = struct
         match MultiSet.remove ~key:option counts with
         | Some counts ->
             let options = Argv.{values; counts} in
-            let log = Match.Matched option :: log in
+            let log = Match.Exact option :: log in
             step_state_log (state, log, options) ~input ~visited
         | None -> Chain.empty)
     | Consume (Option (option, Some _), state), input -> (
         match MultiMap.remove ~key:option values with
         | Some (value, values) ->
             let options = Argv.{values; counts} in
-            let log = Match.Captured (option, value) :: log in
+            let log = Match.Capture (option, value) :: log in
             step_state_log (state, log, options) ~input ~visited
         | None -> Chain.empty)
 
@@ -338,14 +338,14 @@ module NFA = struct
     | None -> printfn " e"; Error [`Match_not_found] (* TODO: better report *)
     | Some log ->
         Ok (List.fold_left (fun map -> function
-          | Match.Captured (atom, value) ->
+          | Match.Capture (atom, value) ->
               printfn "Captured (%S, %S)" atom value;
               Map.replace_exn atom map ~f:Value.(function
                 | String _ -> String value
                 | Option _  -> Option (Some value)
                 | List tail -> List (value :: tail)
                 | _ -> failwithf "bug: captured toggle type for %S" value)
-          | Match.Matched atom ->
+          | Match.Exact atom ->
               printfn "Matched %S" atom;
               Map.replace_exn atom map ~f:Value.(function
                 | Unit -> Unit
