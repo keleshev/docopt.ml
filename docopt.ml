@@ -8,13 +8,13 @@ let (let*) = Result.bind
 module MutableSet = struct
   type 'a t = ('a, unit) Hashtbl.t
   let create (): 'a t = Hashtbl.create 64
-  let add t key = Hashtbl.add t key ()
+  let add t ~key = Hashtbl.add t key ()
   let mem = Hashtbl.mem
 end
 
 module Result = struct
   include Result
-  
+
   let to_either = function Ok ok -> Either.Left ok | Error e -> Either.Right e
 end
 
@@ -30,7 +30,7 @@ module String = struct
   let slice_on char string =
     match index_opt string char with
     | None -> string, None
-    | Some i -> 
+    | Some i ->
         sub string 0 i, Some (sub string (i + 1) (length string - i - 1))
 end
 
@@ -51,9 +51,9 @@ module Chain = struct
 
   let rec concat_map f = function
     | Singleton s -> f s
-    | Concat (x, y) -> 
+    | Concat (x, y) ->
         let left = concat_map f x
-        and right = concat_map f y in 
+        and right = concat_map f y in
         concat left right
     | Empty as other -> other
 
@@ -69,7 +69,7 @@ end
 module Levenshtein = struct
   (** Edit distance to give spelling hints
       https://www.baeldung.com/cs/levenshtein-distance-computation
-  
+
       Time: O(min(a, b) * min(a, b, bound))
       Space: O(min(a, b))
   *)
@@ -125,7 +125,7 @@ module Map = struct
   (** Change value for key, fail if key not already present *)
   let replace_exn key ~f map =
     map |> update key (function
-      | Some x -> Some (f x) 
+      | Some x -> Some (f x)
       | None -> failwithf "invalid key %S" key)
 
   let find_exn, find = find, find_opt
@@ -140,11 +140,11 @@ module MultiSet = struct
 
   let empty = Map.empty
 
-  let push ~key map = 
+  let add ~key map =
     let count = match Map.find key map with Some x -> x | _ -> 0 in
     Map.add map ~key ~value:(count + 1)
 
-  let pop ~key map =
+  let remove ~key map =
     match Map.find key map with
     | Some count when count > 0 -> Some (Map.add ~key ~value:(count - 1) map)
     | Some _ | None -> None
@@ -154,11 +154,11 @@ module MultiMap = struct
   type 'a t = 'a list Map.t
   let empty = Map.empty
 
-  let push ~key ~value map =
+  let add ~key ~value map =
     let f = function Some list -> Some (value :: list) | _ -> Some [value] in
     Map.update key f map
 
-  let pop ~key map =
+  let remove ~key map =
     match Map.find key map with
     | Some (head :: tail) -> Some (head, Map.add ~key ~value:tail map)
     | Some [] | None -> None
@@ -176,7 +176,7 @@ module Argv = struct
     | Option_with_argument of string * string
     | Option_without_argument of string
     | Argument of string
-  
+
   (* Add argv to errors? Point out error location? *)
   let rec scan ~specs = function
     | [] -> []
@@ -201,7 +201,7 @@ module Argv = struct
             Error e :: scan ~specs tail
         | Some {canonical; argument=false; _}, None ->
             Ok (Option_without_argument canonical) :: scan ~specs tail)
-    | head :: tail -> 
+    | head :: tail ->
         Ok (Argument head) :: scan ~specs tail
 
   let tokenize argv ~specs =
@@ -218,12 +218,12 @@ module Argv = struct
     let nil = {arguments=[]; options={values=Map.empty; counts=MultiSet.empty}} in
     let cons token {arguments; options={values; counts}} = match token with
       | Option_with_argument (option, argument) ->
-          let values = MultiMap.push ~key:option ~value:argument values in
+          let values = MultiMap.add ~key:option ~value:argument values in
           {arguments; options={values; counts}}
-      | Option_without_argument option -> 
-          let counts = MultiSet.push ~key:option counts in
+      | Option_without_argument option ->
+          let counts = MultiSet.add ~key:option counts in
           {arguments; options={values; counts}}
-      | Argument argument -> 
+      | Argument argument ->
           {arguments=argument :: arguments; options={values; counts}}
     in
     Ok (List.fold ~cons ~nil tokens)
@@ -240,8 +240,8 @@ module Atom = struct
     | Argument of string
 
   let of_string_unchecked source =
-    if String.starts_with ~prefix:"<" source then 
-      Argument source 
+    if String.starts_with ~prefix:"<" source then
+      Argument source
     else if String.starts_with ~prefix:"--" source then
       let option, argument = String.slice_on '=' source in
       Option (option, argument)
@@ -250,11 +250,11 @@ module Atom = struct
 end
 
 module Value = struct
-  type t = 
-    | Unit 
-    | Bool of bool 
-    | Int of int 
-    | String of string 
+  type t =
+    | Unit
+    | Bool of bool
+    | Int of int
+    | String of string
     | Option of string option
     | List of string list
 end
@@ -284,7 +284,7 @@ module NFA = struct
         step_state_log (state, log, options) ~input ~visited
     | Consume (Argument a, state), Some arg ->
         printfn "%d: %S => %S" state.id a arg;
-        Chain.singleton (state, Match.Captured (a, arg) :: log, options) 
+        Chain.singleton (state, Match.Captured (a, arg) :: log, options)
     | Consume (Command c, state), Some arg when c = arg ->
         printfn "%d: %S" state.id c;
         Chain.singleton (state, Match.Matched c :: log, options)
@@ -292,25 +292,25 @@ module NFA = struct
     | Consume (Command _, _), _ ->
         Chain.empty
     | Consume (Option (option, None), state), input -> (
-        match MultiSet.pop ~key:option counts with
-        | Some counts -> 
+        match MultiSet.remove ~key:option counts with
+        | Some counts ->
             let options = Argv.{values; counts} in
             let log = Match.Matched option :: log in
             step_state_log (state, log, options) ~input ~visited
         | None -> Chain.empty)
     | Consume (Option (option, Some _), state), input -> (
-        match MultiMap.pop ~key:option values with
+        match MultiMap.remove ~key:option values with
         | Some (value, values) ->
             let options = Argv.{values; counts} in
             let log = Match.Captured (option, value) :: log in
             step_state_log (state, log, options) ~input ~visited
         | None -> Chain.empty)
-      
+
   and step_state_log (state, log, options) ~input ~visited =
-    if MutableSet.mem visited (state.id, log) then 
+    if MutableSet.mem visited (state.id, log) then
       Chain.empty (* Key optimisation: avoid visiting states many times *)
     else begin
-      MutableSet.add visited (state.id, log);
+      MutableSet.add visited ~key:(state.id, log);
       if is_final state && input = None then (* condition depends on options? *)
         Chain.singleton (state, log, options)
       else
@@ -386,9 +386,9 @@ module Pattern = struct
 
   let compile = Compiler.run ~next:NFA.final
 
-  (* <x> [<y>] [<z>] <w> - Report ambiguous grammars? 
+  (* <x> [<y>] [<z>] <w> - Report ambiguous grammars?
      How to report a matching error?
-     [-xyz] vs [x y] meaning? 
+     [-xyz] vs [x y] meaning?
      Matching performance? *)
 end
 
@@ -413,11 +413,11 @@ module Defaults = struct
     | Discrete (Command a | Option (a, None)) -> Map.singleton a Unit
     | Optional pattern -> Map.map optionalize (infer pattern)
     | Multiple pattern -> Map.map promote (infer pattern)
-    | Sequence (left, right) -> 
+    | Sequence (left, right) ->
         Map.merge (infer left) (infer right) ~both:(fun _ -> promote)
     | Junction (left, right) ->
         Map.merge (infer left) (infer right) ~both:max ~one:optionalize
-end  
+end
 
 module Type = struct
   type _ t =
@@ -450,7 +450,7 @@ module Type = struct
     | None -> Error (`Can't_parse_x_expected_type (source, Int))
 
   module Dynamic = struct
-    type t = 
+    type t =
       | Unit
       | Bool
       | Int
@@ -468,10 +468,10 @@ module Type = struct
 
     (** Do we support parsing a value of this type from an argv parameter? *)
     let is_parsable = function
-      | Int     
+      | Int
       | String -> true
-      | Unit    
-      | Bool    
+      | Unit
+      | Bool
       | Option _
       | List _ -> false
 
@@ -502,7 +502,7 @@ module Type = struct
     | (List String), Value.List l -> l
     | (List _), Value.List _ -> failwithf "TODO"
     | _ -> failwithf "bug: this state should have been eliminated by type_check"
-  
+
   let rec to_dynamic: type a. a t -> Dynamic.t = function
     | Unit     -> Dynamic.Unit
     | Bool     -> Dynamic.Bool
@@ -519,7 +519,7 @@ module Term = struct
     | Get: 'a Type.t * string -> 'a t
     | Map: ('a -> 'b) * 'a t -> 'b t
     | Tuple: 'a t * 'b t -> ('a * 'b) t
-  
+
   (** Infer environment of all type annotations *)
   let rec infer: type a. a t -> Type.Dynamic.Set.t Map.t = function
     | Get (t, atom) -> Map.singleton atom (Set.singleton (Type.to_dynamic t))
@@ -551,7 +551,7 @@ let type_check type_env value_env =
   if errors = [] then Ok () else Error errors
 
 let run
-  : type a. argv:string list -> doc:Doc.t -> a Term.t -> (a, _) result 
+  : type a. argv:string list -> doc:Doc.t -> a Term.t -> (a, _) result
   = fun ~argv ~doc term ->
     (* Static part *)
     let type_env = Term.infer term in
