@@ -5,13 +5,6 @@ let printfn x = Printf.ksprintf (if debug then print_endline else (fun _ -> ()))
 
 let (let*) = Result.bind
 
-module MutableSet = struct
-  type 'a t = ('a, unit) Hashtbl.t
-  let create (): 'a t = Hashtbl.create 64
-  let add t ~key = Hashtbl.add t key ()
-  let mem = Hashtbl.mem
-end
-
 module Result = struct
   include Result
 
@@ -32,6 +25,119 @@ module String = struct
     | None -> string, None
     | Some i ->
         sub string 0 i, Some (sub string (i + 1) (length string - i - 1))
+end
+
+module Map = struct
+  (* Persistent immutable map based on AA tree *)
+  type ('key, 'value) t =
+    | Empty
+    | Node of {
+        level: int;
+        key: 'key;
+        value: 'value;
+        left: ('key, 'value) t;
+        right: ('key, 'value) t;
+      }
+
+  let skew = function
+    | Node ({left=Node left; _} as t) when t.level = left.level ->
+        Node {left with right=Node {t with left=left.right}}
+    | other -> other
+
+  let split = function
+    | Node ({right=Node ({right=Node right_right; _} as right); _} as t)
+      when right_right.level = t.level ->
+        Node {right with left=Node {t with right=right.left};
+                         level=right.level + 1}
+    | other -> other
+
+  let rec find key = function
+    | Empty -> None
+    | Node t ->
+        match compare key t.key with
+        | -1 -> find key t.left
+        | +1 -> find key t.right
+        | _  -> Some t.value
+
+  let rec update ~key ~value ~choice = function
+    | Empty -> Node {key; value; level=1; left=Empty; right=Empty}
+    | Node t ->
+        match compare key t.key with
+        | -1 -> Node {t with left=update ~key ~value ~choice t.left} |> skew |> split
+        | +1 -> Node {t with right=update ~key ~value ~choice t.right} |> skew |> split
+        | _  -> Node {t with value=choice value t.value}
+
+  let empty = Empty
+
+  let singleton key value =
+    Node {key; value; level=1; left=Empty; right=Empty}
+
+  let rec mapi f = function
+    | Node ({level=_; key; value; left; right} as t) ->
+        Node {t with value=f key value; left=mapi f left; right=mapi f right}
+    | Empty -> Empty
+
+  let map f t = mapi (fun _ value -> f value) t
+
+  let rec fold ~cons ~nil = function
+    | Empty -> nil
+    | Node {left; key; value; right; _} ->
+        fold left ~cons ~nil:(cons key value (fold ~cons ~nil right))
+
+  (* [union_biased a b] inserts every element from a into b
+     Time: O(a * log(a + b)). *)
+  let union_biased ~choice smaller bigger =
+    fold smaller ~nil:bigger ~cons:(fun key value -> update ~key ~value ~choice)
+
+  (* [union a b] set union
+     Time: O(min(a, b) * log(a + b)) *)
+  let union ~choice left right =
+    match left, right with
+    | Empty, t | t, Empty -> t
+    | Node n, Node m when n.level >= m.level -> union_biased ~choice left right
+    | _ -> union_biased ~choice:(fun x y -> choice y x) right left
+
+  type 'a one_both = One of 'a | Both of 'a * 'a
+
+  (* O(min(a, b) * log(a + b)) *)
+  let merge ~one ~both left right =
+    let left = map (fun x -> One x) left in
+    let right = map (fun x -> One x) right in
+    let choice left right =
+      match left, right with
+      | One l, One r -> Both (l, r)
+      | _ -> assert false
+    in
+    let union = union left right ~choice in
+    map (function One x -> one x | Both (x, y) -> both x y) union
+
+  let add ~key ~value t = update ~key ~value ~choice:(fun x _ -> x) t
+
+  let to_list t = fold ~cons:(fun k v tail -> (k, v) :: tail) ~nil:[] t
+  let of_list list =
+    let cons (key, value) tail = add ~key ~value tail in
+    List.fold ~nil:empty ~cons list
+
+  let keys t = fold ~cons:(fun key _ tail -> key :: tail) ~nil:[] t
+  let values t = fold ~cons:(fun _ value tail -> value :: tail) ~nil:[] t
+end
+
+module Set = struct
+  type 'a t = ('a, unit) Map.t
+
+  let empty = Map.empty
+  let singleton a = Map.singleton a ()
+  let add ~key t = Map.add ~key ~value:() t
+  let fold ~cons ~nil = Map.fold ~cons:(fun key _ -> cons key) ~nil
+  let to_list = Map.keys
+  let union t = Map.union ~choice:(fun _ _ -> ()) t
+end
+
+module MutableSet = struct
+  type 'a t = ('a, unit) Hashtbl.t
+  let create (): 'a t = Hashtbl.create 64
+  let add t ~key = Hashtbl.add t key ()
+  let mem = Hashtbl.mem
 end
 
 module Chain = struct
@@ -107,36 +213,8 @@ module Levenshtein = struct
     if n > m then aux ~bound a b else aux ~bound b a
 end
 
-module Map = struct
-  include Map.Make(String)
-
-  let merge ?(one=fun x -> x) ~both left right =
-    let merger _key left right =
-      match left, right with
-      | Some x, None | None, Some x -> Some (one x)
-      | Some l, Some r -> Some (both l r)
-      | None, None -> assert false in
-    merge merger left right
-
-  let add ~key ~value map = add key value map
-
-  let keys t = fold (fun key _value list -> key :: list) t []
-
-  (** Change value for key, fail if key not already present *)
-  let replace_exn key ~f map =
-    map |> update key (function
-      | Some x -> Some (f x)
-      | None -> failwithf "invalid key %S" key)
-
-  let find_exn, find = find, find_opt
-
-  let of_list list =
-    let cons (key, value) map = add ~key ~value map in
-    List.fold ~cons ~nil:empty list
-end
-
 module MultiSet = struct
-  type t = int Map.t
+  type 'a t = ('a, int) Map.t
 
   let empty = Map.empty
 
@@ -151,12 +229,11 @@ module MultiSet = struct
 end
 
 module MultiMap = struct
-  type 'a t = 'a list Map.t
+  type ('k, 'v) t = ('k, 'v list) Map.t
   let empty = Map.empty
 
   let add ~key ~value map =
-    let f = function Some list -> Some (value :: list) | _ -> Some [value] in
-    Map.update key f map
+    Map.update ~key ~value:[value] ~choice:List.append map
 
   let remove ~key map =
     match Map.find key map with
@@ -210,7 +287,7 @@ module Argv = struct
     | _, errors -> Error [`Tokenizer_errors (argv, errors)]
 
   (** Pre-parsed argument vector *)
-  type options = {values: string MultiMap.t; counts: MultiSet.t}
+  type options = {values: (string, string) MultiMap.t; counts: string MultiSet.t}
   type t = {arguments: string list; options: options}
 
   let parse argv ~specs =
@@ -340,14 +417,14 @@ module NFA = struct
         Ok (List.fold_left (fun map -> function
           | Match.Capture (atom, value) ->
               printfn "Captured (%S, %S)" atom value;
-              Map.replace_exn atom map ~f:Value.(function
+              Map.update map ~key:atom ~value:Value.Unit ~choice:(fun _ -> function
                 | String _ -> String value
                 | Option _  -> Option (Some value)
                 | List tail -> List (value :: tail)
                 | _ -> failwithf "bug: captured toggle type for %S" value)
           | Match.Exact atom ->
               printfn "Matched %S" atom;
-              Map.replace_exn atom map ~f:Value.(function
+              Map.update map ~key:atom ~value:Value.Unit ~choice:(fun _ -> function
                 | Unit -> Unit
                 | Bool _ -> Bool true
                 | Int n -> Int (n + 1)
@@ -393,7 +470,7 @@ module Pattern = struct
 end
 
 module Doc = struct
-  type t = {usage: Pattern.t; options: Option.t Map.t}
+  type t = {usage: Pattern.t; options: (string, Option.t) Map.t}
 end
 
 module Defaults = struct
@@ -414,7 +491,7 @@ module Defaults = struct
     | Optional pattern -> Map.map optionalize (infer pattern)
     | Multiple pattern -> Map.map promote (infer pattern)
     | Sequence (left, right) ->
-        Map.merge (infer left) (infer right) ~both:(fun _ -> promote)
+        Map.union (infer left) (infer right) ~choice:(fun _ -> promote)
     | Junction (left, right) ->
         Map.merge (infer left) (infer right) ~both:max ~one:optionalize
 end
@@ -484,8 +561,6 @@ module Type = struct
       | Value.Bool _, Bool
       | Value.Int _, Int -> true
       | _ -> false
-
-    module Set = Set.Make (struct type nonrec t = t let compare = compare end)
   end
 
   (* Cast value to type. Ignore type errors, those are eliminated in
@@ -512,8 +587,6 @@ module Type = struct
     | List t   -> Dynamic.List (to_dynamic t)
 end
 
-module Set = Type.Dynamic.Set
-
 module Term = struct
   type _ t =
     | Get: 'a Type.t * string -> 'a t
@@ -521,21 +594,21 @@ module Term = struct
     | Tuple: 'a t * 'b t -> ('a * 'b) t
 
   (** Infer environment of all type annotations *)
-  let rec infer: type a. a t -> Type.Dynamic.Set.t Map.t = function
+  let rec infer: type a. a t -> (string, Type.Dynamic.t Set.t) Map.t = function
     | Get (t, atom) -> Map.singleton atom (Set.singleton (Type.to_dynamic t))
     | Map (_callback, term) -> infer term
-    | Tuple (left, right) -> Map.merge ~both:Set.union (infer left) (infer right)
+    | Tuple (left, right) -> Map.union (infer left) (infer right) ~choice:Set.union
 
   (** Evaluate term by looking up values in the map *)
-  let rec eval: type a. env:(Value.t Map.t) -> a t -> a = fun ~env -> function
-    | Get (t, atom) -> Type.cast t (Map.find_exn atom env)
+  let rec eval: type a. env:((string, Value.t) Map.t) -> a t -> a = fun ~env -> function
+    | Get (t, atom) -> Type.cast t (Map.find atom env |> Stdlib.Option.get)
     | Map (callback, term) -> callback (eval ~env term)
     | Tuple (left, right) -> eval ~env left, eval ~env right
 end
 
 let type_check type_env value_env =
-  let errors = Map.fold (fun atom types errors ->
-    Set.fold (fun dynamic_type errors ->
+  let errors = Map.fold type_env ~nil:[] ~cons:(fun atom types errors ->
+    Set.fold types ~nil:errors ~cons:(fun dynamic_type errors ->
       match Map.find atom value_env with
       | None ->
           let error = atom, Type.Dynamic.to_string dynamic_type, Map.keys value_env in
@@ -545,9 +618,7 @@ let type_check type_env value_env =
             errors
           else
             let error = atom, Type.Dynamic.to_string dynamic_type, default in
-            `Type_error error :: errors
-    ) types errors
-  ) type_env [] in
+            `Type_error error :: errors)) in
   if errors = [] then Ok () else Error errors
 
 let run
