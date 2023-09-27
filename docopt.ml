@@ -28,7 +28,7 @@ module String = struct
 end
 
 module Map = struct
-  (* Persistent immutable map based on AA tree *)
+  (* Persistent immutable polymorphic map based on AA trees. *)
   type ('key, 'value) t =
     | Empty
     | Node of {
@@ -133,6 +133,34 @@ module Set = struct
   let union t = Map.union ~choice:(fun _ _ -> ()) t
 end
 
+module MultiMap = struct
+  type ('key, 'value) t = ('key, 'value list) Map.t
+  let empty = Map.empty
+
+  let add ~key ~value map =
+    Map.update ~key ~value:[value] ~choice:List.append map
+
+  let remove ~key map =
+    match Map.find key map with
+    | Some (head :: tail) -> Some (head, Map.add ~key ~value:tail map)
+    | Some [] | None -> None
+end
+
+module MultiSet = struct
+  type 'a t = ('a, int) Map.t
+
+  let empty = Map.empty
+
+  let add ~key map =
+    let count = match Map.find key map with Some x -> x | _ -> 0 in
+    Map.add map ~key ~value:(count + 1)
+
+  let remove ~key map =
+    match Map.find key map with
+    | Some count when count > 0 -> Some (Map.add ~key ~value:(count - 1) map)
+    | Some _ | None -> None
+end
+
 module MutableSet = struct
   type 'a t = ('a, unit) Hashtbl.t
   let create (): 'a t = Hashtbl.create 64
@@ -213,32 +241,59 @@ module Levenshtein = struct
     if n > m then aux ~bound a b else aux ~bound b a
 end
 
-module MultiSet = struct
-  type 'a t = ('a, int) Map.t
+module JSON = struct
+  type t =
+    | Null
+    | Boolean of bool
+    | Number of float
+    | String of string
+    | Array of t list
+    | Object of (string * t) list
 
-  let empty = Map.empty
+  let fprintf = Format.fprintf
+  let sprintf = Format.asprintf
 
-  let add ~key map =
-    let count = match Map.find key map with Some x -> x | _ -> 0 in
-    Map.add map ~key ~value:(count + 1)
+  let pp_list ~sep pp =
+    Format.pp_print_list ~pp_sep:(fun ppf () -> fprintf ppf sep) pp
 
-  let remove ~key map =
-    match Map.find key map with
-    | Some count when count > 0 -> Some (Map.add ~key ~value:(count - 1) map)
-    | Some _ | None -> None
-end
+  (** Round-trippable floats printing *)
+  let number_to_string n =
+    let s = sprintf "%.15g" n in
+    if Float.of_string s = n then
+      s
+    else
+      sprintf "%.17g" n
 
-module MultiMap = struct
-  type ('k, 'v) t = ('k, 'v list) Map.t
-  let empty = Map.empty
+  let pp_string_body ppf =
+    String.iter (function
+      | '"'    -> fprintf ppf {|\"|}
+      | '\\'   -> fprintf ppf {|\\|}
+      | '\b'   -> fprintf ppf {|\b|}
+      | '\x0C' -> fprintf ppf {|\f|}
+      | '\n'   -> fprintf ppf {|\n|}
+      | '\r'   -> fprintf ppf {|\r|}
+      | '\t'   -> fprintf ppf {|\t|}
+      | '\x00'..'\x1F' as non_print_char ->
+          fprintf ppf {|\u%.4X|} (Char.code non_print_char)
+      | char   -> fprintf ppf {|%c|} char
+    )
 
-  let add ~key ~value map =
-    Map.update ~key ~value:[value] ~choice:List.append map
+  let box pp ppf value = fprintf ppf "@[<hv>%a@]" pp value
 
-  let remove ~key map =
-    match Map.find key map with
-    | Some (head :: tail) -> Some (head, Map.add ~key ~value:tail map)
-    | Some [] | None -> None
+  let rec pp ppf = function
+    | Null      -> fprintf ppf "null"
+    | Boolean b -> fprintf ppf "%b" b
+    | Number n  -> fprintf ppf "%s" (number_to_string n)
+    | String s  -> fprintf ppf {|"%a"|} pp_string_body s
+    | Array a   -> fprintf ppf
+       "[@;<0 2>%a@;<0 0>]" (pp_list ~sep:",@;<1 2>" (box pp)) a
+    | Object o  -> fprintf ppf
+       "{@;<0 2>%a@;<0 0>}" (pp_list ~sep:",@;<1 2>" (box pp_pair)) o
+
+  and pp_pair ppf (field, value) =
+    fprintf ppf {|"%a": %a|} pp_string_body field pp value
+
+  let to_string = sprintf "%a" (box pp)
 end
 
 (* * *)
@@ -278,8 +333,37 @@ module Argv = struct
             Error e :: scan ~specs tail
         | Some {canonical; argument=false; _}, None ->
             Ok (Option_without_argument canonical) :: scan ~specs tail)
+    | "-" :: _ -> failwith "TODO: -"
+    | head :: tail when String.starts_with ~prefix:"-" head ->
+        scan_short_options ~specs 1 head tail
     | head :: tail ->
         Ok (Argument head) :: scan ~specs tail
+
+  and scan_short_options ~specs i head tail =
+    if i >= String.length head then
+      scan ~specs tail
+    else
+      let option = sprintf "-%c" String.(get head i) in
+      match Map.find option specs with
+      | None ->
+          let e = `Unknown_option option in
+          Error e :: scan_short_options ~specs (i + 1) head tail
+      (* TODO: include canonical and synonyms in error message *)
+      | Some Option.{canonical; argument=false; _} ->
+          let result = Option_without_argument canonical in
+          Ok result :: scan_short_options ~specs (i + 1) head tail
+      | Some Option.{canonical; argument=true; _} ->
+          let argument = String.(sub head (i + 1) (length head - i - 1)) in
+          match argument, tail with
+          | "", head :: tail when String.starts_with ~prefix:"-" head ->
+              let e = `Option_requires_argument_got (option, head) in
+              Error e :: scan ~specs tail
+          | "", head :: tail ->
+              Ok (Option_with_argument (canonical, head)) :: scan ~specs tail
+          | "", [] ->
+              [Error (`Option_requires_argument option)]
+          | argument, tail ->
+              Ok (Option_with_argument (canonical, argument)) :: scan ~specs tail
 
   let tokenize argv ~specs =
     match List.partition_map Result.to_either (scan argv ~specs) with
@@ -322,6 +406,8 @@ module Atom = struct
     else if String.starts_with ~prefix:"--" source then
       let option, argument = String.slice_on '=' source in
       Option (option, argument)
+    else if String.starts_with ~prefix:"-" source then
+      Option (source, None)
     else
       Command source
 end
@@ -334,12 +420,32 @@ module Value = struct
     | String of string
     | Option of string option
     | List of string list
+
+  let to_json = function
+    | Unit -> JSON.Boolean true
+    | Bool b -> JSON.Boolean b
+    | Int i -> JSON.Number (Float.of_int i)
+    | String s -> JSON.String s
+    | Option None -> JSON.Null
+    | Option (Some s) -> JSON.String s
+    | List l -> JSON.Array (List.map (fun s -> JSON.String s) l)
+end
+
+module Env = struct
+  type t = (string, Value.t) Map.t
+
+  let to_json env =
+    let nil = [] in
+    let cons key value list = (key, Value.to_json value) :: list in
+    JSON.Object (Map.fold ~nil ~cons env)
+
+  let debug t = to_json t |> JSON.to_string |> print_endline
 end
 
 module Match = struct
   type t =
     | Capture of string * string (* Positional and optional arguments *)
-    | Exact of string (* Commands and options without arguments *)
+    | Literal of string (* Commands and options without arguments *)
 end
 
 module NFA = struct
@@ -364,7 +470,7 @@ module NFA = struct
         Chain.singleton (state, Match.Capture (a, arg) :: log, options)
     | Consume (Command c, state), Some arg when c = arg ->
         printfn "%d: %S" state.id c;
-        Chain.singleton (state, Match.Exact c :: log, options)
+        Chain.singleton (state, Match.Literal c :: log, options)
     | Consume (Argument _, _), None
     | Consume (Command _, _), _ ->
         Chain.empty
@@ -372,7 +478,7 @@ module NFA = struct
         match MultiSet.remove ~key:option counts with
         | Some counts ->
             let options = Argv.{values; counts} in
-            let log = Match.Exact option :: log in
+            let log = Match.Literal option :: log in
             step_state_log (state, log, options) ~input ~visited
         | None -> Chain.empty)
     | Consume (Option (option, Some _), state), input -> (
@@ -422,7 +528,7 @@ module NFA = struct
                 | Option _  -> Option (Some value)
                 | List tail -> List (value :: tail)
                 | _ -> failwithf "bug: captured toggle type for %S" value)
-          | Match.Exact atom ->
+          | Match.Literal atom ->
               printfn "Matched %S" atom;
               Map.update map ~key:atom ~value:Value.Unit ~choice:(fun _ -> function
                 | Unit -> Unit
@@ -439,6 +545,20 @@ module Pattern = struct
     | Junction of t * t  (* <x> | <y> *)
     | Optional of t      (* [<x>]     *)
     | Multiple of t      (* <x>...    *)
+
+  (*let rec options = function
+    | Discrete Atom.Option (name, argument) -> Map.singleton name argument
+    | Discrete Atom.(Command _ | Argument _) -> Map.empty
+    | Sequence (left, right) ->
+        let left = options left in
+        let right = options right in
+        let choice one another =
+          match one, another with
+          | None, None -> None
+          | Some _, Some _ -> one
+          | Some argument, None | None, Some argument -> None
+        in
+        Map.union ~choice left right *)
 
   module Compiler = struct
     let arrow atom next =
@@ -470,7 +590,8 @@ module Pattern = struct
 end
 
 module Doc = struct
-  type t = {usage: Pattern.t; options: (string, Option.t) Map.t}
+  (* Abstract syntax tree representing a docopt document *)
+  type t = {usage: Pattern.t; options: Option.t list}
 end
 
 module Defaults = struct
@@ -601,6 +722,7 @@ module Term = struct
 
   (** Evaluate term by looking up values in the map *)
   let rec eval: type a. env:((string, Value.t) Map.t) -> a t -> a = fun ~env -> function
+    (* TODO: instead of .get, error about using unknown or non-canonical name *)
     | Get (t, atom) -> Type.cast t (Map.find atom env |> Stdlib.Option.get)
     | Map (callback, term) -> callback (eval ~env term)
     | Tuple (left, right) -> eval ~env left, eval ~env right
@@ -621,17 +743,37 @@ let type_check type_env value_env =
             `Type_error error :: errors)) in
   if errors = [] then Ok () else Error errors
 
+let options_to_map options =
+  let nil = Map.empty in
+  let cons (option: Option.t) map =
+    let nil = Map.add ~key:option.canonical ~value:option map in
+    let cons synonym map = Map.add ~key:synonym ~value:option map in
+    List.fold ~nil ~cons option.synonyms
+  in
+  List.fold ~nil ~cons options
+
+let reconcile Doc.{usage; options} =
+  let options = options_to_map options in
+  (*let subset = usage_options usage in*)
+  (* Replace "[options]" with options from "options:" section, sans those that already in usage. *)
+  (* Make sure options in usage and options section are consistent. *)
+  (* If no "[options]" shortcut, make sure every option from option section is present in usage. *)
+  (* TODO: Make sure options section does not have duplicates, inconsistencies. *)
+  Ok (usage, options)
+
 let run
   : type a. argv:string list -> doc:Doc.t -> a Term.t -> (a, _) result
   = fun ~argv ~doc term ->
     (* Static part *)
+    let* pattern, options = reconcile doc in
     let type_env = Term.infer term in
-    let defaults = Defaults.infer doc.usage in
+    let defaults = Defaults.infer pattern in
     let* () = type_check type_env defaults in
-    let nfa = Pattern.compile doc.usage in
+    let nfa = Pattern.compile pattern in
     (* Dynamic part *)
-    let* argv = Argv.parse argv ~specs:doc.options in
+    let* argv = Argv.parse argv ~specs:options in
     let* env = NFA.run nfa ~argv ~defaults in
+    (* Env.debug env; *)
     Ok (Term.eval term ~env)
 
 (* Exports *)

@@ -6,13 +6,13 @@ module Map = Docopt.Map
 let (<*>) l r = Sequence (l, r)
 let (!) source = Discrete (Docopt.Atom.of_string_unchecked source)
 let option ?(argument=false) ?(synonyms=[]) canonical =
-   canonical, Docopt.Option.{canonical; argument; synonyms}
+   Docopt.Option.{canonical; argument; synonyms}
 
 module Test_unit_bool_int = struct
   let _doc = "usage: prog unit [bool] int..."
   let doc = Doc.{
     usage= !"unit" <*> Optional !"bool" <*> Multiple !"int";
-    options=Map.empty;
+    options=[];
   }
 
   let main =
@@ -35,7 +35,7 @@ module Test_string_option_list = struct
   let _doc = "usage: prog <string> [<option>] <list>..."
   let doc = Doc.{
     usage= !"<string>" <*> Optional !"<option>" <*> Multiple !"<list>";
-    options=Map.empty;
+    options=[];
   }
 
   let main =
@@ -58,7 +58,7 @@ module Test_explicit_tuple = struct
   let _doc = "usage: prog <string> [<option>] <list>..."
   let doc = Doc.{
     usage= !"<string>" <*> Optional !"<option>" <*> Multiple !"<list>";
-    options=Map.empty;
+    options=[];
   }
 
   let main =
@@ -78,7 +78,7 @@ module Test_russ_cox_pathological_example = struct
     usage= Optional !"a" <*> Optional !"a" 
         <*> Optional !"a" <*> Optional !"a" 
         <*> !"a" <*> !"a" <*> !"a" <*> !"a";
-    options=Map.empty;
+    options=[];
   }
 
   let main = Docopt.(get int "a")
@@ -96,7 +96,7 @@ module Test_russ_cox_pathological_example_large = struct
   let a16 = a4 <*> a4 <*> a4 <*> a4
   let doc = Doc.{
     usage=aq16 <*> aq16 <*> a16 <*> a16;
-    options=Map.empty;
+    options=[];
   }
 
   let main = Docopt.(get int "a")
@@ -111,7 +111,7 @@ module Test_another_russ_cox_pathological_example_potential_infinite_loop = stru
   let _doc = "usage: prog [[a]...]..."
   let doc = Doc.{
     usage=Multiple (Optional (Multiple (Optional !"a")));
-    options=Map.empty;
+    options=[];
   }
 
   let main = Docopt.(get int "a")
@@ -126,7 +126,7 @@ module Test_int_option = struct
   let _doc = "usage: prog --verbose..."
   let doc = Doc.{
     usage=Multiple !"--verbose";
-    options=Map.of_list [option "--verbose"];
+    options=[option "--verbose"];
   }
 
   let main = Docopt.(get int "--verbose")
@@ -140,7 +140,7 @@ module Test_int_option_2 = struct
   let _doc = "usage: prog [--verbose] [--verbose]"
   let doc = Doc.{
     usage= Optional (!"--verbose" <*> !"--verbose");
-    options=Map.of_list [option "--verbose"];
+    options=[option "--verbose"];
   }
 
   let main = Docopt.(get int "--verbose")
@@ -160,7 +160,7 @@ module Test_russ_cox_pathological_example_with_options = struct
   let v32 = v8 <*> v8 <*> v8 <*> v8
   let doc = Doc.{
     usage=vo32 <*> v32;
-    options=Map.of_list [option "--verbose"];
+    options=[option "--verbose"];
   }
   let main = Docopt.(get int "--verbose")
 
@@ -177,7 +177,7 @@ module Testing_potential_infinite_loop_with_options = struct
 
   let doc = Doc.{
     usage=Multiple (Optional (Multiple (Optional !"--verbose")));
-    options=Map.of_list [option "--verbose"];
+    options=[option "--verbose"];
   }
   let main = Docopt.(get int "--verbose")
 
@@ -193,7 +193,7 @@ module Test_option_unit_bool_int = struct
   let _doc = "usage: prog --unit [--bool] --int..."
   let doc = Doc.{
     usage= !"--unit" <*> Optional !"--bool" <*> Multiple !"--int";
-    options=Map.of_list [
+    options=[
       option "--unit"; option "--bool"; option "--int";
     ];
   }
@@ -223,7 +223,7 @@ module Test_option_string_option_list = struct
   let _doc = "usage: prog --string=<s> [--option=<o>] --list=<l>..."
   let doc = Doc.{
     usage= !"--string=<s>" <*> Optional !"--option=<o>" <*> Multiple !"--list=<l>";
-    options=Map.of_list [
+    options=[
       option "--string" ~argument:true; 
       option "--option" ~argument:true; 
       option "--list" ~argument:true;
@@ -245,4 +245,43 @@ module Test_option_string_option_list = struct
   let () =
     Docopt.run main ~doc ~argv:["--string=s"; "--list=l"]
       => Ok ("s", None, ["l"]) 
+end
+
+module Test_short_options = struct
+  let _doc = "Usage: prog [--output=<file>...] [--verbose...]
+  
+  Options:
+    -o, --output <file> 
+    -v, --verbose
+  "
+  let doc = Doc.{
+    usage=Optional (Multiple !"--output=<file>") <*> Optional (Multiple !"--verbose");
+    options=[
+      option "--output" ~argument:true ~synonyms:["-o"];
+      option "--verbose" ~argument:false ~synonyms:["-v"];
+    ];
+  }
+
+  let () = Docopt.(run (get int "--verbose")) ~doc ~argv:[] => Ok 0
+  let () = Docopt.(run (get int "--verbose")) ~doc ~argv:["-v"] => Ok 1
+  let () = Docopt.(run (get int "--verbose")) ~doc ~argv:["-vvv"] => Ok 3
+  let () = Docopt.(run (get int "--verbose")) ~doc ~argv:["-v"; "-v"; "-v"] => Ok 3
+
+  let () = Docopt.(run (get (list string) "--output")) ~doc ~argv:[] => Ok []
+  let () = Docopt.(run (get (list string) "--output"))
+    ~doc ~argv:["-o"; "x"; "-oy"; "-voz"] => Ok ["x"; "y"; "z"]
+  let () = Docopt.(run (get (list string) "--output"))
+    ~doc ~argv:["-ox"] => Ok ["x"]
+  let () = Docopt.(run (get (list string) "--output"))
+    ~doc ~argv:["-vox"] => Ok ["x"]
+
+  let main =
+    let open Docopt in
+    let+ output = get (list string) "--output"
+    and+ verbose = get int "--verbose" in
+    output, verbose
+
+  let () = 
+    Docopt.run main ~doc ~argv:["-vovo"; "-vv"; "-oo"; "-o"; "x"; "-v"]
+      => Ok (["vo"; "o"; "x"], 4)
 end
