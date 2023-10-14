@@ -770,7 +770,7 @@ let options_only_in_usage_section
   let cons option result collected =
     match Map.find option options_in_options_section, result with
     | None, Ok argument ->
-       Ok Option.{canonical=option; synonyms=[]; argument} :: collected
+        Ok Option.{canonical=option; synonyms=[]; argument} :: collected
     | _, Error arguments ->
         let e = option, arguments in
         Error (`Inconsistent_option_argument_in_usage e) :: collected
@@ -780,21 +780,24 @@ let options_only_in_usage_section
         let e = option, argument, argument' in
         Error (`Inconsistent_option_argument_in_usage_vs_options e) :: collected
   in
-  Map.fold ~nil:[] ~cons options_in_usage_section |> Result.list_partition
-
+  match Map.fold ~nil:[] ~cons options_in_usage_section |> Result.list_partition with
+  | Ok options -> Ok (options_to_map options)
+  | Error e -> Error e
   
 let reconcile Doc.{usage; options} =
-  let options_in_options_section = options_to_map options in
-  let options_in_usage_section = Pattern.to_options usage in
-  let* _options_only_in_usage_section =
-    options_only_in_usage_section options_in_usage_section options_in_options_section in
+  (* Here, usage' means options from usage section,
+     options' - options from options section. *)
+  let options' = options_to_map options in
+  let usage' = Pattern.to_options usage in
+  let* usage'_sans_options' = options_only_in_usage_section usage' options' in
+  let choice _ _ = failwith "disjoint union" in
+  let all_options = Map.union ~choice options' usage'_sans_options' in 
   (*let subset = usage_options usage in*)
   (* Replace "[options]" with options from "options:" section, sans those that already in usage. *)
   (* Make sure options in usage and options section are consistent. *)
   (* If no "[options]" shortcut, make sure every option from option section is present in usage. *)
   (* TODO: Make sure options section does not have duplicates, inconsistencies. *)
-  let options = options_in_options_section in
-  Ok (usage, options)
+  Ok (usage, all_options)
 
 let run
   : type a. argv:string list -> doc:Doc.t -> a Term.t -> (a, _) result

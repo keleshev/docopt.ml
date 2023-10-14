@@ -224,11 +224,7 @@ module Test_option_string_option_list = struct
   let _doc = "usage: prog --string=<s> [--option=<o>] --list=<l>..."
   let doc = Doc.{
     usage= !"--string=<s>" <*> Optional !"--option=<o>" <*> Multiple !"--list=<l>";
-    options=[
-      option "--string=<a>";
-      option "--option=<a>";
-      option "--list=<a>";
-    ];
+    options=[];
   }
 
   let main =
