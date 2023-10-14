@@ -9,6 +9,11 @@ module Result = struct
   include Result
 
   let to_either = function Ok ok -> Either.Left ok | Error e -> Either.Right e
+
+  let list_partition results =
+    match List.partition_map to_either results with
+    | value, [] -> Ok value
+    | _, errors -> Error errors
 end
 
 module List = struct
@@ -20,7 +25,7 @@ end
 module String = struct
   include String
 
-  let slice_on char string =
+  let slice_on_char char string =
     match index_opt string char with
     | None -> string, None
     | Some i ->
@@ -296,10 +301,12 @@ module JSON = struct
   let to_string = sprintf "%a" (box pp)
 end
 
+module Maybe = Stdlib.Option (* Alias to help distinguish options and options *)
+
 (* * *)
 
 module Option = struct
-  type t = {canonical: string; synonyms: string list; argument: bool}
+  type t = {canonical: string; synonyms: string list; argument: string Maybe.t}
 end
 
 module Argv = struct
@@ -314,24 +321,24 @@ module Argv = struct
     | [] -> []
     | "--" :: tail -> List.map (fun a -> Ok (Argument a)) tail
     | head :: tail when String.starts_with ~prefix:"--" head -> (
-        let option, maybe_argument = String.slice_on '=' head in
-        (* TODO include non-canonical name in errors too *)
+        let option, maybe_argument = String.slice_on_char '=' head in
         match Map.find option specs, maybe_argument with
         | None, _ -> Error (`Unknown_option head) :: scan ~specs tail
-        | Some Option.{canonical; argument=true; _}, Some argument ->
+        | Some Option.{canonical; argument=Some _; _}, Some argument ->
             Ok (Option_with_argument (canonical, argument)) :: scan ~specs tail
-        | Some {canonical; argument=true; _}, None -> (
+        | Some {canonical; argument=Some argument; _}, None -> (
             match tail with
-            | [] -> [Error (`Option_requires_argument canonical)]
+            | [] ->
+                [Error (`Option_requires_argument (option, canonical, argument))]
             | head :: tail when String.starts_with ~prefix:"-" head ->
-                let e = `Option_requires_argument_got (canonical, head) in
-                Error e :: scan ~specs tail
+                let e = option, canonical, argument, head in
+                Error (`Option_requires_argument_got e) :: scan ~specs tail
             | head :: tail ->
                 Ok (Option_with_argument (canonical, head)) :: scan ~specs tail)
-        | Some {canonical; argument=false; _}, Some argument ->
-            let e = `Unnecessary_option_argument (canonical, argument) in
-            Error e :: scan ~specs tail
-        | Some {canonical; argument=false; _}, None ->
+        | Some {canonical; argument=None; _}, Some argument ->
+            let e = option, canonical, argument in
+            Error (`Unnecessary_option_argument e) :: scan ~specs tail
+        | Some {canonical; argument=None; _}, None ->
             Ok (Option_without_argument canonical) :: scan ~specs tail)
     | "-" :: _ -> failwith "TODO: -"
     | head :: tail when String.starts_with ~prefix:"-" head ->
@@ -348,27 +355,23 @@ module Argv = struct
       | None ->
           let e = `Unknown_option option in
           Error e :: scan_short_options ~specs (i + 1) head tail
-      (* TODO: include canonical and synonyms in error message *)
-      | Some Option.{canonical; argument=false; _} ->
+      | Some Option.{canonical; argument=None; _} ->
           let result = Option_without_argument canonical in
           Ok result :: scan_short_options ~specs (i + 1) head tail
-      | Some Option.{canonical; argument=true; _} ->
-          let argument = String.(sub head (i + 1) (length head - i - 1)) in
-          match argument, tail with
+      | Some Option.{canonical; argument=Some argument; _} ->
+          match String.(sub head (i + 1) (length head - i - 1)), tail with
           | "", head :: tail when String.starts_with ~prefix:"-" head ->
-              let e = `Option_requires_argument_got (option, head) in
-              Error e :: scan ~specs tail
+              let e = option, canonical, argument, head in
+              Error (`Option_requires_argument_got e) :: scan ~specs tail
           | "", head :: tail ->
               Ok (Option_with_argument (canonical, head)) :: scan ~specs tail
           | "", [] ->
-              [Error (`Option_requires_argument option)]
+              [Error (`Option_requires_argument (option, canonical, argument))]
           | argument, tail ->
               Ok (Option_with_argument (canonical, argument)) :: scan ~specs tail
 
   let tokenize argv ~specs =
-    match List.partition_map Result.to_either (scan argv ~specs) with
-    | tokens, [] -> Ok tokens
-    | _, errors -> Error [`Tokenizer_errors (argv, errors)]
+    scan argv ~specs |> Result.list_partition
 
   (** Pre-parsed argument vector *)
   type options = {values: (string, string) MultiMap.t; counts: string MultiSet.t}
@@ -396,7 +399,7 @@ module Atom = struct
     | Short of string
 
   type t =
-    | Option of string * string Stdlib.Option.t
+    | Option of string * string Maybe.t
     | Command of string
     | Argument of string
 
@@ -404,7 +407,7 @@ module Atom = struct
     if String.starts_with ~prefix:"<" source then
       Argument source
     else if String.starts_with ~prefix:"--" source then
-      let option, argument = String.slice_on '=' source in
+      let option, argument = String.slice_on_char '=' source in
       Option (option, argument)
     else if String.starts_with ~prefix:"-" source then
       Option (source, None)
@@ -546,19 +549,28 @@ module Pattern = struct
     | Optional of t      (* [<x>]     *)
     | Multiple of t      (* <x>...    *)
 
-  (*let rec options = function
-    | Discrete Atom.Option (name, argument) -> Map.singleton name argument
+  (** Extract options from pattern. 
+      Error means option takes an argument in on place, but not in another. *)
+  let rec to_options = function
+    | Discrete Atom.Option (name, argument) -> Map.singleton name (Ok argument)
     | Discrete Atom.(Command _ | Argument _) -> Map.empty
-    | Sequence (left, right) ->
-        let left = options left in
-        let right = options right in
+    | Sequence (left, right)
+    | Junction (left, right) ->
         let choice one another =
           match one, another with
-          | None, None -> None
-          | Some _, Some _ -> one
-          | Some argument, None | None, Some argument -> None
+          | Ok (Some argument), Ok None
+          | Ok None, Ok (Some argument) -> Error [argument]
+          | Error left, Error right -> Error (left @ right)
+          | Error left, Ok (Some right) -> Error (left @ [right])
+          | Ok (Some left), Error right -> Error (left :: right)
+          | Error e, _ | _, Error e -> Error e
+          (* TODO: Is it useful to capture all unique argument names? *)
+          | Ok argument, Ok _ -> Ok argument
         in
-        Map.union ~choice left right *)
+        Map.union ~choice (to_options left) (to_options right)
+    | Optional pattern
+    | Multiple pattern ->
+        to_options pattern
 
   module Compiler = struct
     let arrow atom next =
@@ -723,7 +735,7 @@ module Term = struct
   (** Evaluate term by looking up values in the map *)
   let rec eval: type a. env:((string, Value.t) Map.t) -> a t -> a = fun ~env -> function
     (* TODO: instead of .get, error about using unknown or non-canonical name *)
-    | Get (t, atom) -> Type.cast t (Map.find atom env |> Stdlib.Option.get)
+    | Get (t, atom) -> Type.cast t (Map.find atom env |> Maybe.get)
     | Map (callback, term) -> callback (eval ~env term)
     | Tuple (left, right) -> eval ~env left, eval ~env right
 end
@@ -752,13 +764,36 @@ let options_to_map options =
   in
   List.fold ~nil ~cons options
 
+let options_only_in_usage_section
+    options_in_usage_section
+    options_in_options_section =
+  let cons option result collected =
+    match Map.find option options_in_options_section, result with
+    | None, Ok argument ->
+       Ok Option.{canonical=option; synonyms=[]; argument} :: collected
+    | _, Error arguments ->
+        let e = option, arguments in
+        Error (`Inconsistent_option_argument_in_usage e) :: collected
+    | Some Option.{argument=Some _; _}, Ok (Some _)
+    | Some Option.{argument=None; _}, Ok None -> collected
+    | Some Option.{argument; _}, Ok argument' ->
+        let e = option, argument, argument' in
+        Error (`Inconsistent_option_argument_in_usage_vs_options e) :: collected
+  in
+  Map.fold ~nil:[] ~cons options_in_usage_section |> Result.list_partition
+
+  
 let reconcile Doc.{usage; options} =
-  let options = options_to_map options in
+  let options_in_options_section = options_to_map options in
+  let options_in_usage_section = Pattern.to_options usage in
+  let* _options_only_in_usage_section =
+    options_only_in_usage_section options_in_usage_section options_in_options_section in
   (*let subset = usage_options usage in*)
   (* Replace "[options]" with options from "options:" section, sans those that already in usage. *)
   (* Make sure options in usage and options section are consistent. *)
   (* If no "[options]" shortcut, make sure every option from option section is present in usage. *)
   (* TODO: Make sure options section does not have duplicates, inconsistencies. *)
+  let options = options_in_options_section in
   Ok (usage, options)
 
 let run

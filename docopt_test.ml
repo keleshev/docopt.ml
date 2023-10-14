@@ -5,7 +5,8 @@ module Doc = Docopt.Doc
 module Map = Docopt.Map
 let (<*>) l r = Sequence (l, r)
 let (!) source = Discrete (Docopt.Atom.of_string_unchecked source)
-let option ?(argument=false) ?(synonyms=[]) canonical =
+let option ?(synonyms=[]) source =
+  let canonical, argument = Docopt.String.slice_on_char '=' source in
    Docopt.Option.{canonical; argument; synonyms}
 
 module Test_unit_bool_int = struct
@@ -224,9 +225,9 @@ module Test_option_string_option_list = struct
   let doc = Doc.{
     usage= !"--string=<s>" <*> Optional !"--option=<o>" <*> Multiple !"--list=<l>";
     options=[
-      option "--string" ~argument:true; 
-      option "--option" ~argument:true; 
-      option "--list" ~argument:true;
+      option "--string=<a>";
+      option "--option=<a>";
+      option "--list=<a>";
     ];
   }
 
@@ -257,8 +258,8 @@ module Test_short_options = struct
   let doc = Doc.{
     usage=Optional (Multiple !"--output=<file>") <*> Optional (Multiple !"--verbose");
     options=[
-      option "--output" ~argument:true ~synonyms:["-o"];
-      option "--verbose" ~argument:false ~synonyms:["-v"];
+      option "--output=<x>" ~synonyms:["-o"];
+      option "--verbose" ~synonyms:["-v"];
     ];
   }
 
