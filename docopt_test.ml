@@ -282,3 +282,21 @@ module Test_short_options = struct
     Docopt.run main ~doc ~argv:["-vovo"; "-vv"; "-oo"; "-o"; "x"; "-v"]
       => Ok (["vo"; "o"; "x"], 4)
 end
+
+module Test_options_shortcut = struct
+  let _doc = "usage: prog [options] [--one]"
+  let doc = Doc.{
+    usage= Optional !"options";
+    options=[
+      option "--one"; option "--two=<x>";
+    ];
+  }
+
+  let main =
+    let open Docopt in
+    let+ b = get bool "--one"
+    and+ c = get (option string) "--two" in
+    b, c
+
+  let () = Docopt.run main ~doc ~argv:["--one"] => Ok (true, None)
+end

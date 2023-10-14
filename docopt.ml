@@ -64,6 +64,14 @@ module Map = struct
         | +1 -> find key t.right
         | _  -> Some t.value
 
+  let rec has_key key = function
+    | Empty -> false
+    | Node t ->
+        match compare key t.key with
+        | -1 -> has_key key t.left
+        | +1 -> has_key key t.right
+        | _  -> true
+
   let rec update ~key ~value ~choice = function
     | Empty -> Node {key; value; level=1; left=Empty; right=Empty}
     | Node t ->
@@ -305,8 +313,29 @@ module Maybe = Stdlib.Option (* Alias to help distinguish options and options *)
 
 (* * *)
 
+module Atom = struct
+  type t =
+    | Option of string * string Maybe.t (* "--option", Some "<argument>" *)
+    | Command of string (* command *)
+    | Argument of string (* <argument> *)
+
+  let of_string_unchecked source =
+    if String.starts_with ~prefix:"<" source then
+      Argument source
+    else if String.starts_with ~prefix:"--" source then
+      let option, argument = String.slice_on_char '=' source in
+      Option (option, argument)
+    else if String.starts_with ~prefix:"-" source then
+      Option (source, None)
+    else
+      Command source
+end
+
 module Option = struct
   type t = {canonical: string; synonyms: string list; argument: string Maybe.t}
+
+  let aliases {canonical; synonyms; _} = canonical :: synonyms
+  let to_atom {canonical; argument; _} = Atom.Option (canonical, argument)
 end
 
 module Argv = struct
@@ -391,28 +420,6 @@ module Argv = struct
           {arguments=argument :: arguments; options={values; counts}}
     in
     Ok (List.fold ~cons ~nil tokens)
-end
-
-module Atom = struct
-  type option =
-    | Long of string
-    | Short of string
-
-  type t =
-    | Option of string * string Maybe.t
-    | Command of string
-    | Argument of string
-
-  let of_string_unchecked source =
-    if String.starts_with ~prefix:"<" source then
-      Argument source
-    else if String.starts_with ~prefix:"--" source then
-      let option, argument = String.slice_on_char '=' source in
-      Option (option, argument)
-    else if String.starts_with ~prefix:"-" source then
-      Option (source, None)
-    else
-      Command source
 end
 
 module Value = struct
@@ -549,7 +556,28 @@ module Pattern = struct
     | Optional of t      (* [<x>]     *)
     | Multiple of t      (* <x>...    *)
 
-  (** Extract options from pattern. 
+  let rec replace ~before ~after = function
+    | pattern when pattern = before -> after
+    | Discrete atom -> Discrete atom
+    | Sequence (left, right) ->
+        Sequence (replace ~before ~after left, replace ~before ~after right)
+    | Junction (left, right) ->
+        Junction (replace ~before ~after left, replace ~before ~after right)
+    | Optional pattern -> Optional (replace ~before ~after pattern)
+    | Multiple pattern -> Multiple (replace ~before ~after pattern)
+
+  let rec exists ~target ~source =
+    match source with
+    | pattern when pattern = target -> true
+    | Discrete _ -> false
+    | Sequence (left, right) ->
+        exists ~target ~source:left || exists ~target ~source:right
+    | Junction (left, right) ->
+        exists ~target ~source:left || exists ~target ~source:right
+    | Optional pattern -> exists ~target ~source:pattern
+    | Multiple pattern -> exists ~target ~source:pattern
+
+  (** Extract options from pattern.
       Error means option takes an argument in on place, but not in another. *)
   let rec to_options = function
     | Discrete Atom.Option (name, argument) -> Map.singleton name (Ok argument)
@@ -756,13 +784,11 @@ let type_check type_env value_env =
   if errors = [] then Ok () else Error errors
 
 let options_to_map options =
-  let nil = Map.empty in
-  let cons (option: Option.t) map =
-    let nil = Map.add ~key:option.canonical ~value:option map in
-    let cons synonym map = Map.add ~key:synonym ~value:option map in
-    List.fold ~nil ~cons option.synonyms
+  let cons option map =
+    let cons alias map = Map.add ~key:alias ~value:option map in
+    List.fold ~nil:map ~cons (Option.aliases option)
   in
-  List.fold ~nil ~cons options
+  List.fold ~nil:Map.empty ~cons options
 
 let options_only_in_usage_section
     options_in_usage_section
@@ -783,7 +809,27 @@ let options_only_in_usage_section
   match Map.fold ~nil:[] ~cons options_in_usage_section |> Result.list_partition with
   | Ok options -> Ok (options_to_map options)
   | Error e -> Error e
-  
+
+let options_only_in_options_section usage options =
+  let is_in_usage Option.{canonical; synonyms; _} =
+    List.exists (fun name -> Map.has_key name usage) (canonical :: synonyms)
+  in
+  List.filter (fun option -> not (is_in_usage option)) options
+
+let options_shortcut = (* [options] *)
+  Pattern.(Optional (Discrete (Atom.Command "options")))
+
+let is_options_shortcut_in_usage usage =
+  Pattern.exists ~target:options_shortcut ~source:usage
+
+let option_to_pattern option =
+  Pattern.(Optional (Discrete (Option.to_atom option)))
+
+let option_list_to_pattern head tail =
+  let nil = option_to_pattern head in
+  let cons head tail = Pattern.Sequence (option_to_pattern head, tail) in
+  List.fold ~nil ~cons tail
+
 let reconcile Doc.{usage; options} =
   (* Here, usage' means options from usage section,
      options' - options from options section. *)
@@ -791,13 +837,21 @@ let reconcile Doc.{usage; options} =
   let usage' = Pattern.to_options usage in
   let* usage'_sans_options' = options_only_in_usage_section usage' options' in
   let choice _ _ = failwith "disjoint union" in
-  let all_options = Map.union ~choice options' usage'_sans_options' in 
-  (*let subset = usage_options usage in*)
-  (* Replace "[options]" with options from "options:" section, sans those that already in usage. *)
+  let all_options = Map.union ~choice options' usage'_sans_options' in
+  let options'_sans_usage' = options_only_in_options_section usage' options in
+  if is_options_shortcut_in_usage usage then
+    match options'_sans_usage' with
+    | [] -> Error [`No_options_for_options_shortcut]
+    | head :: tail ->
+        let after = option_list_to_pattern head tail in
+        let usage = Pattern.replace usage ~before:options_shortcut ~after in
+        Ok (usage, all_options)
+  else
+    match options'_sans_usage' with
+    | [] -> Ok (usage, all_options)
+    | list -> Error [`Unused_options (List.concat_map Option.aliases list)]
   (* Make sure options in usage and options section are consistent. *)
-  (* If no "[options]" shortcut, make sure every option from option section is present in usage. *)
   (* TODO: Make sure options section does not have duplicates, inconsistencies. *)
-  Ok (usage, all_options)
 
 let run
   : type a. argv:string list -> doc:Doc.t -> a Term.t -> (a, _) result
