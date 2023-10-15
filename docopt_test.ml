@@ -315,6 +315,9 @@ module Test_parser = struct
   parse atom "-o" => `Ok (Discrete (Option ("-o", None)));
   parse atom "-op" => `Ok (Sequence (Discrete (Option ("-o", None)), 
                                      Discrete (Option ("-p", None))));
+  parse atom "-opq" => `Ok (Sequence (Sequence (Discrete (Option ("-o", None)),
+                                                Discrete (Option ("-p", None))),
+                                      Discrete (Option ("-q", None))));
   parse atom "<arg>" => `Ok (Discrete (Argument "<arg>"));
   parse atom "command" => `Ok (Discrete (Command "command"));
 
@@ -328,4 +331,7 @@ module Test_parser = struct
     => `Ok (Junction (Junction (command, option), argument));
   (* TODO? parse pattern "command|--option|<argument>"
     => `Ok (Junction (command, Junction (option, argument)));*)
+  
+  parse pattern "command --option <argument>"
+    => `Ok (Sequence (Sequence (command, option), argument));
 end

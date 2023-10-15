@@ -288,7 +288,7 @@ module JSON = struct
 
   let pp_string_body ppf =
     String.iter (function
-      | '"'    -> fprintf ppf {|\"|}
+      | '"'    -> fprintf ppf {|\"|} (* {|\"|} *)
       | '\\'   -> fprintf ppf {|\\|}
       | '\b'   -> fprintf ppf {|\b|}
       | '\x0C' -> fprintf ppf {|\f|}
@@ -1063,9 +1063,14 @@ module Parsing = struct
       let+ pattern = confined
       and+ ellipsis = maybe (token "...") in
       if ellipsis = None then pattern else Pattern.Multiple pattern in
-    let junction =
+    let sequence =
       let+ first = multiple
-      and+ rest = zero_or_more (token "|" % multiple) in
+      and+ rest = zero_or_more multiple in
+      let cons left right = Pattern.Sequence (left, right) in
+      List.fold_left cons first rest in
+    let junction =
+      let+ first = sequence
+      and+ rest = zero_or_more (token "|" % sequence) in
       let cons left right = Pattern.Junction (left, right) in
       List.fold_left cons first rest in
     junction x
@@ -1073,9 +1078,6 @@ module Parsing = struct
   (*
     # Characters that need no escaping in a POSIX shell (sans "=" and ".")
     safe_char <- [a-zA-Z0-9] / [%+/:@_-]
-
-    # Shortcut for optional whitespace
-    _ <- [ \n\r\t]*
 
     argument <- "<" safe_char+ ">"  # GNU ARGUMENTS? space?
     long_option <- "--" safe_char+ ("=" argument)?
@@ -1085,12 +1087,16 @@ module Parsing = struct
     # Ordered choice operator "/" rules out ambiguities
     atom <- long_option / short_option_stride / "--" / "-" / argument / command
 
+    # Shortcut for optional whitespace
+    _ <- [ \n\r\t]*
+
     # Recursive definition of pattern
     required <- "(" _ pattern ")" _
     optional <- "[" _ pattern "]" _
     confined <- required / optional / atom _
     multiple <- confined ("..." _)?
-    junction <- multiple ("|" _ multiple)*
+    sequence <- multiple multiple*
+    junction <- sequence ("|" _ sequence)*
     pattern <- junction
   *)
 end
