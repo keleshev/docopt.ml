@@ -288,7 +288,7 @@ module JSON = struct
 
   let pp_string_body ppf =
     String.iter (function
-      | '"'    -> fprintf ppf {|\"|} (* {|\"|} *)
+      | '"'    -> fprintf ppf {|\"|} (* {|"|} *)
       | '\\'   -> fprintf ppf {|\\|}
       | '\b'   -> fprintf ppf {|\b|}
       | '\x0C' -> fprintf ppf {|\f|}
