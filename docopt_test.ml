@@ -1,6 +1,7 @@
 let (=>) left right = print_char (if left = right then '.' else 'F')
 
 open Docopt.Pattern
+open Docopt.Atom
 module Doc = Docopt.Doc
 module Map = Docopt.Map
 let (<*>) l r = Sequence (l, r)
@@ -299,4 +300,17 @@ module Test_options_shortcut = struct
     b, c
 
   let () = Docopt.run main ~doc ~argv:["--one"] => Ok (true, None)
+end
+
+module Test_parser = struct
+  let parse = Docopt.Parsing.Parser.parse_string_to_completion in
+  let atom = Docopt.Parsing.atom in
+
+  parse atom "--option" => `Ok (Discrete (Option ("--option", None)));
+  parse atom "--option=<arg>" => `Ok (Discrete (Option ("--option", Some "<arg>")));
+  parse atom "-o" => `Ok (Discrete (Option ("-o", None)));
+  parse atom "-op" => `Ok (Sequence (Discrete (Option ("-o", None)), 
+                                     Discrete (Option ("-p", None))));
+  parse atom "<arg>" => `Ok (Discrete (Argument "<arg>"));
+  parse atom "cmd" => `Ok (Discrete (Command "cmd"));
 end

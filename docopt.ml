@@ -1,4 +1,5 @@
 let sprintf = Printf.sprintf
+let printf = Printf.printf
 let failwithf x = Printf.ksprintf failwith x
 let debug = false
 let printfn x = Printf.ksprintf (if debug then print_endline else (fun _ -> ())) x
@@ -24,6 +25,14 @@ end
 
 module String = struct
   include String
+
+  let for_all_i predicate string =
+    let n = length string in
+    let rec loop i =
+      if i = n then true
+      else if predicate i (unsafe_get string i) then loop (succ i)
+      else false in
+    loop 0
 
   let slice_on_char char string =
     match index_opt string char with
@@ -881,3 +890,161 @@ let int = Type.Int
 let string = Type.String
 let option t = Type.Option t
 let list t = Type.List t
+
+module Parsing = struct
+  module State = struct
+    type t = {index: int; source: string}
+  end
+
+  module Parser = struct
+    type 'a t = State.t -> ('a * State.t) option
+
+    let parse_string_to_completion parser string =
+      match parser State.{index=0; source=string} with
+      | None -> `Failure
+      | Some (value, State.{index; source}) ->
+          if index = String.length source then `Ok value
+          else (printf "P"; `Partial value)
+
+    let maybe (parser: 'a t): 'a Maybe.t t = fun state ->
+      match parser state with
+      | Some (value, state) -> Some (Some value, state)
+      | None -> Some (None, state)
+
+    let map callback (parser: 'a t): 'b t = fun state ->
+      match parser state with
+      | Some (value, state) -> Some (callback value, state)
+      | None -> None
+
+    let tuple (first: 'a t) (second: 'b t): ('a * 'b) t = fun state ->
+      match first state with
+      | None -> None
+      | Some (a, state) ->
+          match second state with
+          | None -> None
+          | Some (b, state) -> Some ((a, b), state)
+
+    let (let+) parser callback = map callback parser
+    let (and+) = tuple
+
+    let (&) (first: _ t) (second: 'a t): 'a t = fun state ->
+      match first state with
+      | None -> None
+      | Some (_, state) ->
+          match second state with
+          | None -> None
+          | result -> result
+
+    let (%) = (&)
+
+    let capture (parser: _ t): string t =
+      fun (State.{index; source} as state) ->
+        match parser state with
+        | None -> None
+        | Some (_, new_state) ->
+            Some (String.sub source index (new_state.index - index), new_state)
+
+    let (/) left right = fun state ->
+      match left state with
+      | None -> right state
+      | some -> some
+
+    module Predicate = struct
+
+      let one predicate = fun State.{index; source} ->
+        if index < String.length source && predicate (source.[index]) then
+          Some ((), State.{index=index + 1; source})
+        else
+          None
+
+      let rec count_consecutive count ~predicate State.{index; source} =
+        let new_index = index + count in
+        if new_index < String.length source && predicate source.[new_index] then
+          count_consecutive (count + 1) ~predicate State.{index; source}
+        else
+          count
+
+      let one_or_more predicate = fun (State.{index; source} as state) ->
+        let i = count_consecutive 0 ~predicate state in
+        if i >= 1 then Some ((), State.{index=index + i; source}) else None
+
+      let zero_or_more predicate = fun (State.{index; source} as state) ->
+        let i = count_consecutive 0 ~predicate state in
+        if i >= 0 then Some ((), State.{index=index + i; source}) else None
+    end
+
+    let literal string = fun State.{index; source} ->
+      let new_index = index + String.length string in
+      if new_index <= String.length source &&
+          String.for_all_i (fun j char -> char = source.[index + j]) string then
+        Some ((), State.{index=new_index; source})
+      else
+        None
+  end
+  open Parser
+  module P = Parser.Predicate
+
+  let safe_char = function
+    | 'a'..'z' | 'A'..'Z' | '0'..'9' -> true
+    | '%' | '+' | '.' | '/' | ':' | '@' | '_' | '-' -> true
+    | _ -> false
+
+  let safe_chars = P.one_or_more safe_char
+
+  let whitespace =
+    P.zero_or_more (function ' ' | '\n' | '\r' | '\t' -> true | _ -> false)
+
+  let argument =
+    let+ name = literal "<" % safe_chars % literal ">" |> capture in
+    Pattern.Discrete (Atom.Argument name)
+
+  let long_option =
+    let+ name = literal "--" % safe_chars |> capture
+    and+ argument = maybe (literal "=" % capture argument) in
+    Pattern.Discrete (Atom.Option (name, argument))
+
+  let short_option_stride =
+    let+ first = literal "-" % P.one safe_char |> capture
+    and+ rest = P.zero_or_more safe_char |> capture in
+    let to_pattern option = Pattern.Discrete (Atom.Option (option, None)) in
+    let folder pattern char =
+      Pattern.Sequence (pattern, to_pattern (sprintf "-%c" char)) in
+    String.fold_left folder (to_pattern first) rest
+
+  let command =
+    let+ name = safe_chars |> capture in
+    Pattern.Discrete (Atom.Command name)
+
+  let dash_dash =
+    literal "--" |> map (fun () -> Pattern.Discrete (failwith "TODO"))
+
+  let dash =
+    literal "-" |> map (fun () -> Pattern.Discrete (failwith "TODO"))
+
+  let atom =
+    long_option / short_option_stride / dash_dash / dash / argument / command
+
+  (*
+    # Characters that need no escaping in a POSIX shell (sans "=")
+    safe_char <- [a-zA-Z0-9] / [%+./:@_-]
+
+    # Shortcut for optional whitespace
+    _ <- [ \n\r\t]*
+
+    argument <- "<" safe_char+ ">"  # GNU ARGUMENTS? space?
+    long_option <- "--" safe_char+ ("=" argument)?
+    short_option_stride <- "-" safe_char+
+    command <- safe_char+  # safe_char_no_caps?
+
+    # Ordered choice operator "/" rules out ambiguities
+    atom <- long_option / short_option_stride / "--" / "-" / argument / command
+
+    # Recursive definition of pattern
+    required <- "(" _ pattern ")" _
+    optional <- "[" _ pattern "]" _
+    confined <- required / optional / atom _
+    multiple <- confined ("..." _)?
+    junction <- multiple ("|" _ multiple)*
+    pattern <- junction
+  *)
+end
