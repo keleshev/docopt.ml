@@ -305,6 +305,10 @@ end
 module Test_parser = struct
   let parse = Docopt.Parsing.Parser.parse_string_to_completion in
   let atom = Docopt.Parsing.atom in
+  let pattern = Docopt.Parsing.pattern in
+  let option = Discrete (Option ("--option", None)) in
+  let command = Discrete (Command "command") in
+  let argument = Discrete (Argument "<argument>") in
 
   parse atom "--option" => `Ok (Discrete (Option ("--option", None)));
   parse atom "--option=<arg>" => `Ok (Discrete (Option ("--option", Some "<arg>")));
@@ -312,5 +316,16 @@ module Test_parser = struct
   parse atom "-op" => `Ok (Sequence (Discrete (Option ("-o", None)), 
                                      Discrete (Option ("-p", None))));
   parse atom "<arg>" => `Ok (Discrete (Argument "<arg>"));
-  parse atom "cmd" => `Ok (Discrete (Command "cmd"));
+  parse atom "command" => `Ok (Discrete (Command "command"));
+
+  parse pattern "command" => `Ok command;
+  parse pattern "(command)" => `Ok command;
+  parse pattern "[command]" => `Ok (Optional command);
+  parse pattern "command..." => `Ok (Multiple command);
+
+  parse pattern "command|--option" => `Ok (Junction (command, option));
+  parse pattern "command|--option|<argument>"
+    => `Ok (Junction (Junction (command, option), argument));
+  (* TODO? parse pattern "command|--option|<argument>"
+    => `Ok (Junction (command, Junction (option, argument)));*)
 end

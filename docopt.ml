@@ -328,6 +328,12 @@ module Atom = struct
     | Command of string (* command *)
     | Argument of string (* <argument> *)
 
+  let debug = function
+    | Option (name, Some argument) -> sprintf "--%s=%s" name argument
+    | Option (name, None) -> sprintf "--%s" name
+    | Command name -> name ^ "!"
+    | Argument name -> sprintf "<%s>" name
+
   let of_string_unchecked source =
     if String.starts_with ~prefix:"<" source then
       Argument source
@@ -564,6 +570,13 @@ module Pattern = struct
     | Junction of t * t  (* <x> | <y> *)
     | Optional of t      (* [<x>]     *)
     | Multiple of t      (* <x>...    *)
+
+  let rec debug = function
+    | Discrete atom -> Atom.debug atom
+    | Sequence (left, right) -> sprintf "(%s %s)" (debug left) (debug right)
+    | Junction (left, right) -> sprintf "(%s | %s)" (debug left) (debug right)
+    | Optional pattern -> sprintf "[%s]" (debug pattern)
+    | Multiple pattern -> sprintf "(%s...)" (debug pattern)
 
   let rec replace ~before ~after = function
     | pattern when pattern = before -> after
@@ -901,10 +914,10 @@ module Parsing = struct
 
     let parse_string_to_completion parser string =
       match parser State.{index=0; source=string} with
-      | None -> `Failure
+      | None -> printf "X"; `Failure
       | Some (value, State.{index; source}) ->
-          if index = String.length source then `Ok value
-          else (printf "P"; `Partial value)
+          if index = String.length source then (`Ok value)
+          else (printf "P%i %i" index (String.length source); `Partial value)
 
     let maybe (parser: 'a t): 'a Maybe.t t = fun state ->
       match parser state with
@@ -927,7 +940,7 @@ module Parsing = struct
     let (let+) parser callback = map callback parser
     let (and+) = tuple
 
-    let (&) (first: _ t) (second: 'a t): 'a t = fun state ->
+    let (%) (first: _ t) (second: 'a t): 'a t = fun state ->
       match first state with
       | None -> None
       | Some (_, state) ->
@@ -935,7 +948,13 @@ module Parsing = struct
           | None -> None
           | result -> result
 
-    let (%) = (&)
+    let (<%) (first: 'a t) (second: _ t): 'a t = fun state ->
+      match first state with
+      | None -> None
+      | Some (value, state) ->
+          match second state with
+          | None -> None
+          | Some (_, state) -> Some (value, state)
 
     let capture (parser: _ t): string t =
       fun (State.{index; source} as state) ->
@@ -948,6 +967,14 @@ module Parsing = struct
       match left state with
       | None -> right state
       | some -> some
+
+    let rec zero_or_more (parser: 'a t): 'a list t = fun state ->
+      match parser state with
+      | None -> Some ([], state)
+      | Some (head, state) ->
+          match zero_or_more parser state with
+          | None -> assert false
+          | Some (tail, state) -> Some (head :: tail, state)
 
     module Predicate = struct
 
@@ -986,7 +1013,7 @@ module Parsing = struct
 
   let safe_char = function
     | 'a'..'z' | 'A'..'Z' | '0'..'9' -> true
-    | '%' | '+' | '.' | '/' | ':' | '@' | '_' | '-' -> true
+    | '%' | '+' | '/' | ':' | '@' | '_' | '-' -> true
     | _ -> false
 
   let safe_chars = P.one_or_more safe_char
@@ -1024,9 +1051,28 @@ module Parsing = struct
   let atom =
     long_option / short_option_stride / dash_dash / dash / argument / command
 
+  let token string = literal string <% whitespace
+
+  let rec pattern x =
+    let required = token "(" % pattern <% token ")" in
+    let optional =
+      let+ p = token "[" % pattern <% token "]" in
+      Pattern.Optional p in
+    let confined = required / optional / (atom <% whitespace) in
+    let multiple =
+      let+ pattern = confined
+      and+ ellipsis = maybe (token "...") in
+      if ellipsis = None then pattern else Pattern.Multiple pattern in
+    let junction =
+      let+ first = multiple
+      and+ rest = zero_or_more (token "|" % multiple) in
+      let cons left right = Pattern.Junction (left, right) in
+      List.fold_left cons first rest in
+    junction x
+
   (*
-    # Characters that need no escaping in a POSIX shell (sans "=")
-    safe_char <- [a-zA-Z0-9] / [%+./:@_-]
+    # Characters that need no escaping in a POSIX shell (sans "=" and ".")
+    safe_char <- [a-zA-Z0-9] / [%+/:@_-]
 
     # Shortcut for optional whitespace
     _ <- [ \n\r\t]*
