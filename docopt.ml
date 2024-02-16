@@ -977,13 +977,14 @@ module Parsing = struct
           | Some (tail, state) -> Some (head :: tail, state)
 
     module Predicate = struct
+      let set = String.contains
 
       let one predicate = fun State.{index; source} ->
         if index < String.length source && predicate (source.[index]) then
           Some ((), State.{index=index + 1; source})
         else
           None
-
+      
       let rec count_consecutive count ~predicate State.{index; source} =
         let new_index = index + count in
         if new_index < String.length source && predicate source.[new_index] then
@@ -1007,13 +1008,14 @@ module Parsing = struct
         Some ((), State.{index=new_index; source})
       else
         None
+
   end
   open Parser
   module P = Parser.Predicate
 
   let safe_char = function
     | 'a'..'z' | 'A'..'Z' | '0'..'9' -> true
-    | '%' | '+' | '/' | ':' | '@' | '_' | '-' -> true
+    | '%' | '+' | '/' | '@' | '_' | '-' -> true
     | _ -> false
 
   let safe_chars = P.one_or_more safe_char
@@ -1038,18 +1040,18 @@ module Parsing = struct
       Pattern.Sequence (pattern, to_pattern (sprintf "-%c" char)) in
     String.fold_left folder (to_pattern first) rest
 
-  let command =
-    let+ name = safe_chars |> capture in
-    Pattern.Discrete (Atom.Command name)
-
   let dash_dash =
     literal "--" |> map (fun () -> Pattern.Discrete (failwith "TODO"))
 
   let dash =
     literal "-" |> map (fun () -> Pattern.Discrete (failwith "TODO"))
 
+  let command =
+    let+ name = safe_chars |> capture in
+    Pattern.Discrete (Atom.Command name)
+
   let atom =
-    long_option / short_option_stride / dash_dash / dash / argument / command
+    argument / long_option / short_option_stride / dash_dash / dash / command
 
   let token string = literal string <% whitespace
 
@@ -1075,9 +1077,19 @@ module Parsing = struct
       List.fold_left cons first rest in
     junction x
 
+  let usage = token "Usage:"
+  let usage_section = usage % token "prog" % pattern
+
+  let newline = literal "\n" % maybe (literal "\r")
+  let horizontal_whitespace = P.set " \t"
+  
+  let options = token "Options:"
+  let options_section = options % P.(one (set "")
+
+    
   (*
-    # Characters that need no escaping in a POSIX shell (sans "=" and ".")
-    safe_char <- [a-zA-Z0-9] / [%+/:@_-]
+    # Characters that need no escaping in a POSIX shell (sans [=.:])
+    safe_char <- [a-zA-Z0-9] / [%+/@_-]
 
     argument <- "<" safe_char+ ">"  # GNU ARGUMENTS? space?
     long_option <- "--" safe_char+ ("=" argument)?
@@ -1085,18 +1097,33 @@ module Parsing = struct
     command <- safe_char+  # safe_char_no_caps?
 
     # Ordered choice operator "/" rules out ambiguities
-    atom <- long_option / short_option_stride / "--" / "-" / argument / command
+    atom <- argument / long_option / short_option_stride / "--" / "-" / command
 
     # Shortcut for optional whitespace
-    _ <- [ \n\r\t]*
+    newline <- "\n\r" / "\n"
+    _ <- ([ \t]+ / newline+ [ \t]+)*
 
     # Recursive definition of pattern
-    required <- "(" _ pattern ")" _
-    optional <- "[" _ pattern "]" _
-    confined <- required / optional / atom _
-    multiple <- confined ("..." _)?
+    # TODO? unfilled
+    required <- _ "(" pattern _ ")"
+    optional <- _ "[" pattern _ "]"
+    confined <- required / optional / _ atom
+    multiple <- confined (_ "...")?
     sequence <- multiple multiple*
-    junction <- sequence ("|" _ sequence)*
+    junction <- sequence (_ "|" sequence)*
     pattern <- junction
+
+    usage <- ("Usage:" / "usage:")
+    usage_section <- usage _ (program_name _ pattern?)+
+
+    options_prose <- (!(newline horizontal_whitespace+ "-") .)
+    options <- ("Options:" / "options:")
+    options_section <- options ............
+
+    prose <- (!(usage / options) .)+
+
+    docopt <- prose? usage_section prose? options_section prose?
+
+      
   *)
 end

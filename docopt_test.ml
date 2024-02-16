@@ -128,7 +128,7 @@ module Test_int_option = struct
   let _doc = "usage: prog --verbose..."
   let doc = Doc.{
     usage=Multiple !"--verbose";
-    options=[option "--verbose"];
+    options=[];
   }
 
   let main = Docopt.(get int "--verbose")
@@ -142,7 +142,7 @@ module Test_int_option_2 = struct
   let _doc = "usage: prog [--verbose] [--verbose]"
   let doc = Doc.{
     usage= Optional (!"--verbose" <*> !"--verbose");
-    options=[option "--verbose"];
+    options=[];
   }
 
   let main = Docopt.(get int "--verbose")
@@ -162,7 +162,7 @@ module Test_russ_cox_pathological_example_with_options = struct
   let v32 = v8 <*> v8 <*> v8 <*> v8
   let doc = Doc.{
     usage=vo32 <*> v32;
-    options=[option "--verbose"];
+    options=[];
   }
   let main = Docopt.(get int "--verbose")
 
@@ -179,7 +179,7 @@ module Testing_potential_infinite_loop_with_options = struct
 
   let doc = Doc.{
     usage=Multiple (Optional (Multiple (Optional !"--verbose")));
-    options=[option "--verbose"];
+    options=[];
   }
   let main = Docopt.(get int "--verbose")
 
@@ -195,9 +195,7 @@ module Test_option_unit_bool_int = struct
   let _doc = "usage: prog --unit [--bool] --int..."
   let doc = Doc.{
     usage= !"--unit" <*> Optional !"--bool" <*> Multiple !"--int";
-    options=[
-      option "--unit"; option "--bool"; option "--int";
-    ];
+    options=[];
   }
 
   let main =
@@ -249,7 +247,7 @@ module Test_short_options = struct
   let _doc = "Usage: prog [--output=<file>...] [--verbose...]
   
   Options:
-    -o, --output <file> 
+    -o <file>, --output=<file> 
     -v, --verbose
   "
   let doc = Doc.{
@@ -285,7 +283,12 @@ module Test_short_options = struct
 end
 
 module Test_options_shortcut = struct
-  let _doc = "usage: prog [options] [--one]"
+  let _doc = "usage: prog [options] [--one]
+  
+  Options:
+    --one
+    --two=<x> 
+  "
   let doc = Doc.{
     usage= Optional !"options";
     options=[
