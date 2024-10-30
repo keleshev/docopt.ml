@@ -42,7 +42,9 @@ module String = struct
 end
 
 module Map = struct
-  (* Persistent immutable polymorphic map based on AA trees. *)
+  (* Persistent immutable polymorphic map based on AA trees. 
+     Polymorphic map is more flexible than functor-based one,
+     and makes porting to other languages easier. *)
   type ('key, 'value) t =
     | Empty
     | Node of {
@@ -264,6 +266,7 @@ module Levenshtein = struct
 end
 
 module JSON = struct
+  (* Complete and correct JSON encoder; for debugging and testing. *)
   type t =
     | Null
     | Boolean of bool
@@ -278,7 +281,7 @@ module JSON = struct
   let pp_list ~sep pp =
     Format.pp_print_list ~pp_sep:(fun ppf () -> fprintf ppf sep) pp
 
-  (** Round-trippable floats printing *)
+  (** Round-trippable *and* nice floats encoding *)
   let number_to_string n =
     let s = sprintf "%.15g" n in
     if Float.of_string s = n then
@@ -468,12 +471,20 @@ module Env = struct
 end
 
 module Match = struct
+  (* Successfull match of a pattern to an argument *)
   type t =
-    | Capture of string * string (* Positional and optional arguments *)
-    | Literal of string (* Commands and options without arguments *)
+    (* Capturing match of positional and option arguments to values:
+     * "--option", "value"
+     * "<argument>", "value" *)
+    | Capture of string * string 
+    (* Literal match of commands and options without arguments:
+     * "--flag"
+     * "command" *)
+    | Literal of string
 end
 
 module NFA = struct
+  (* Nondeterministic finite automaton *)
   type state = {id: int; mutable transitions: transition Chain.t}
   and transition = Consume of Atom.t * state | Epsilon of state
   (* {id; transitions=Chain.singleton (Consume (a, s))}  is  (id)--a-->(s)
