@@ -582,6 +582,9 @@ module Pattern = struct
     | Optional of t      (* [<x>]     *)
     | Multiple of t      (* <x>...    *)
 
+  let sequence a b = Sequence (a, b)
+  let junction a b = Junction (a, b)
+
   let rec debug = function
     | Discrete atom -> Atom.debug atom
     | Sequence (left, right) -> sprintf "(%s %s)" (debug left) (debug right)
@@ -940,32 +943,31 @@ module Parsing = struct
       | Some (value, state) -> Some (callback value, state)
       | None -> None
 
-    let tuple (first: 'a t) (second: 'b t): ('a * 'b) t = fun state ->
-      match first state with
+    let (<%>) (left: 'a t) (right: 'b t): ('a * 'b) t = fun state ->
+      match left state with
       | None -> None
       | Some (a, state) ->
-          match second state with
+          match right state with
           | None -> None
           | Some (b, state) -> Some ((a, b), state)
 
-    let (let+) parser callback = map callback parser
-    let (and+) = tuple
-
-    let (%) (first: _ t) (second: 'a t): 'a t = fun state ->
-      match first state with
-      | None -> None
-      | Some (_, state) ->
-          match second state with
-          | None -> None
-          | result -> result
-
-    let (<%) (first: 'a t) (second: _ t): 'a t = fun state ->
-      match first state with
+    let (<%) (left: 'a t) (right: _ t): 'a t = fun state ->
+      match left state with
       | None -> None
       | Some (value, state) ->
-          match second state with
+          match right state with
           | None -> None
           | Some (_, state) -> Some (value, state)
+
+    let (%>) (left: _ t) (right: 'a t): 'a t = fun state ->
+      match left state with
+      | None -> None
+      | Some (_, state) -> right state
+
+    let (%): _ t -> unit t -> unit t = (%>)
+
+    let (let+) parser callback = map callback parser
+    let (and+) = (<%>)
 
     let capture (parser: _ t): string t =
       fun (State.{index; source} as state) ->
@@ -1038,7 +1040,7 @@ module Parsing = struct
 
   let long_option =
     let+ name = literal "--" % safe_chars |> capture
-    and+ argument = maybe (literal "=" % capture argument) in
+    and+ argument = maybe (literal "=" %> capture argument) in
     Pattern.Discrete (Atom.Option (name, argument))
 
   let short_option_stride =
@@ -1061,29 +1063,25 @@ module Parsing = struct
 
   let atom =
     long_option / short_option_stride / dash_dash / dash / argument / command
+    <% whitespace
 
   let token string = literal string <% whitespace
 
   let rec pattern x =
-    let required = token "(" % pattern <% token ")" in
+    let required = token "(" %> pattern <% token ")" in
     let optional =
-      let+ p = token "[" % pattern <% token "]" in
-      Pattern.Optional p in
-    let confined = required / optional / (atom <% whitespace) in
+      let+ pattern = token "[" %> pattern <% token "]" in
+      Pattern.Optional pattern in
+    let confined = required / optional / atom in
     let multiple =
-      let+ pattern = confined
-      and+ ellipsis = maybe (token "...") in
+      let+ pattern, ellipsis = confined <%> maybe (token "...") in
       if ellipsis = None then pattern else Pattern.Multiple pattern in
     let sequence =
-      let+ first = multiple
-      and+ rest = zero_or_more multiple in
-      let cons left right = Pattern.Sequence (left, right) in
-      List.fold_left cons first rest in
+      let+ first, rest = multiple <%> zero_or_more multiple in
+      List.fold_left Pattern.sequence first rest in
     let junction =
-      let+ first = sequence
-      and+ rest = zero_or_more (token "|" % sequence) in
-      let cons left right = Pattern.Junction (left, right) in
-      List.fold_left cons first rest in
+      let+ first, rest = sequence <%> zero_or_more (token "|" %> sequence) in
+      List.fold_left Pattern.junction first rest in
     junction x
 
   (*
@@ -1109,5 +1107,7 @@ module Parsing = struct
     sequence <- multiple multiple*
     junction <- sequence ("|" _ sequence)*
     pattern <- junction
+
+
   *)
 end
