@@ -161,10 +161,10 @@ module MultiMap = struct
   type ('key, 'value) t = ('key, 'value list) Map.t
   let empty = Map.empty
 
-  let add ~key ~value map =
+  let push ~key ~value map =
     Map.update ~key ~value:[value] ~choice:List.append map
 
-  let remove ~key map =
+  let pop ~key map =
     match Map.find key map with
     | Some (head :: tail) -> Some (head, Map.add ~key ~value:tail map)
     | Some [] | None -> None
@@ -175,11 +175,11 @@ module MultiSet = struct
 
   let empty = Map.empty
 
-  let add ~key map =
+  let push ~key map =
     let count = match Map.find key map with Some x -> x | _ -> 0 in
     Map.add map ~key ~value:(count + 1)
 
-  let remove ~key map =
+  let pop ~key map =
     match Map.find key map with
     | Some count when count > 0 -> Some (Map.add ~key ~value:(count - 1) map)
     | Some _ | None -> None
@@ -196,7 +196,10 @@ module Chain = struct
   (* List with O(1) concatenation, but O(length) head *)
   type 'a t = Empty | Singleton of 'a | Concat of 'a t * 'a t
 
-  let _invariant = function Concat (Empty, Empty) -> false | _ -> true
+  let _invariant = function
+    | Concat (Empty, _) | Concat (_, Empty) -> false
+    | _ -> true
+
   let is_empty = function Empty -> true | _ -> false
   let empty = Empty
   let singleton x = Singleton x
@@ -331,11 +334,9 @@ module Atom = struct
     | Command of string (* command *)
     | Argument of string (* <argument> *)
 
-  let debug = function
-    | Option (name, Some argument) -> sprintf "--%s=%s" name argument
-    | Option (name, None) -> sprintf "--%s" name
-    | Command name -> name ^ "!"
-    | Argument name -> sprintf "<%s>" name
+  let to_string = function
+    | Option (name, Some argument) -> sprintf "%s=%s" name argument
+    | Option (name, None) | Command name | Argument name -> name
 
   let of_string_unchecked source =
     if String.starts_with ~prefix:"<" source then
@@ -347,6 +348,10 @@ module Atom = struct
       Option (source, None)
     else
       Command source
+
+  let debug t =
+    assert (of_string_unchecked (to_string t) = t); 
+    to_string t
 end
 
 module Option = struct
@@ -429,10 +434,10 @@ module Argv = struct
     let nil = {arguments=[]; options={values=Map.empty; counts=MultiSet.empty}} in
     let cons token {arguments; options={values; counts}} = match token with
       | Option_with_argument (option, argument) ->
-          let values = MultiMap.add ~key:option ~value:argument values in
+          let values = MultiMap.push ~key:option ~value:argument values in
           {arguments; options={values; counts}}
       | Option_without_argument option ->
-          let counts = MultiSet.add ~key:option counts in
+          let counts = MultiSet.push ~key:option counts in
           {arguments; options={values; counts}}
       | Argument argument ->
           {arguments=argument :: arguments; options={values; counts}}
@@ -511,14 +516,14 @@ module NFA = struct
     | Consume (Command _, _), _ ->
         Chain.empty
     | Consume (Option (option, None), state), input -> (
-        match MultiSet.remove ~key:option counts with
+        match MultiSet.pop ~key:option counts with
         | Some counts ->
             let options = Argv.{values; counts} in
             let log = Match.Literal option :: log in
             step_state_log (state, log, options) ~input ~visited
         | None -> Chain.empty)
     | Consume (Option (option, Some _), state), input -> (
-        match MultiMap.remove ~key:option values with
+        match MultiMap.pop ~key:option values with
         | Some (value, values) ->
             let options = Argv.{values; counts} in
             let log = Match.Capture (option, value) :: log in
